@@ -1,0 +1,175 @@
+<meta charset="utf-8">
+<!-- ===== ชั้นเชื่อมฐานข้อมูล Supabase สำหรับเว็บของร้าน =====
+     แก้เฉพาะ 2 ค่าในบล็อกด้านล่าง (ทั้งคู่เป็นค่าสาธารณะ ใส่ในเว็บได้ ไม่ใช่รหัสลับ)
+     ห้ามเอา service_role key มาใส่ที่นี่เด็ดขาด -->
+<script>
+window.SRC_SUPABASE = {
+  url:     "https://caawyycsvqzyrblbcxko.supabase.co",
+  anonKey: "sb_publishable_wva8Bh0DHH1DpInq1VOovA_6MWO5q0r"
+};
+</script>
+<style>
+#gate{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;background:#0e161e;color:#e7eef5;font:16px/1.6 Anuphan,"IBM Plex Sans Thai",system-ui,sans-serif}
+#gate .box{width:100%;max-width:380px;background:#17222c;border:1px solid #2c3a48;border-radius:14px;padding:26px;display:flex;flex-direction:column;gap:14px}
+#gate h1{font:700 24px/1.3 "IBM Plex Sans Thai",Anuphan,system-ui,sans-serif;margin:0;display:flex;align-items:center;gap:10px}
+#gate h1 i{width:10px;height:24px;border-radius:2px;background:#8fb0ff;display:inline-block}
+#gate p{margin:0;color:#93a4b5;font-size:14px}
+#gate label{display:flex;flex-direction:column;gap:5px;font-size:13.5px;color:#93a4b5;font-weight:500}
+#gate input{font:inherit;padding:10px 12px;border-radius:9px;border:1px solid #2c3a48;background:#0e161e;color:#e7eef5;width:100%}
+#gate form{display:flex;flex-direction:column;gap:12px}
+#gate button{font:inherit;font-weight:600;padding:11px 16px;border:0;border-radius:9px;background:#8fb0ff;color:#0e161e;cursor:pointer}
+#gate button[disabled]{opacity:.5;cursor:default}
+#gate .err{color:#f08a8a;font-size:14px;min-height:20px;margin:0}
+#signout{margin-left:8px;font:inherit;font-size:13.5px;font-weight:500;background:none;border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:5px 12px;cursor:pointer}
+</style>
+<div id="gate"><div class="box">
+  <h1><i></i>SRC garage</h1>
+  <p id="gate-note">ใส่อีเมลและรหัสของร้านเพื่อเข้าใช้งาน</p>
+  <form id="gate-form">
+    <label>อีเมลของร้าน<input name="email" type="email" autocomplete="username" required></label>
+    <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
+    <p class="err" id="gate-err"></p>
+    <button type="submit">เข้าใช้งาน</button>
+  </form>
+</div></div>
+<script>
+(function(){
+  let resolveDb; const dbReady = new Promise(r=>{resolveDb=r;});
+  window.__srcResolveDb = (v)=>resolveDb(v);
+  const downloads = {
+    save: async ({filename, data})=>{
+      const blob = data instanceof Blob ? data : new Blob([data], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename || 'backup.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+      return {status:'saved'};
+    }
+  };
+  window.claude = { use: async (name)=> name==='db' ? dbReady : (name==='downloads' ? downloads : null) };
+})();
+</script>
+<script type="module">
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+const CFG = window.SRC_SUPABASE || {};
+const gate = document.getElementById('gate');
+const note = document.getElementById('gate-note');
+const form = document.getElementById('gate-form');
+const errBox = document.getElementById('gate-err');
+const TABLES = ['customers','vehicles','jobs','services'];
+
+if (String(CFG.url||'').startsWith('PASTE')) {
+  note.textContent = 'หน้านี้ยังไม่ได้ต่อฐานข้อมูลของร้าน — ใส่ค่า Project URL และ anon key ใน _supabase-adapter.html ก่อน (ดู SUPABASE-SETUP.md)';
+  form.hidden = true;
+} else {
+  const sb = createClient(CFG.url, CFG.anonKey, { auth: { persistSession: true, autoRefreshToken: true } });
+  const toErr = (e)=>({ code:(e&&e.code)||'unavailable', message:(e&&(e.message||e.hint))||'เชื่อมต่อฐานข้อมูลไม่ได้' });
+  const asDoc = (row)=>({ id:row.id, exists:true, data:()=>row.data||{}, metadata:{fromCache:false,hasPendingWrites:false} });
+  const asSnap = (rows)=>({ docs:rows.map(asDoc), size:rows.length, empty:rows.length===0, docChanges:()=>[], metadata:{fromCache:false,hasPendingWrites:false} });
+  const split = (path)=>{ const i = path.indexOf('/'); return [path.slice(0,i), path.slice(i+1)]; };
+  const newId = ()=> (crypto.randomUUID ? crypto.randomUUID() : 'x'+Date.now()+Math.random().toString(36).slice(2,8));
+
+  function docRef(table, id){
+    return {
+      id, path: table+'/'+id,
+      get: async ()=>{
+        const { data, error } = await sb.from(table).select('id,data').eq('id', id).maybeSingle();
+        if (error) throw toErr(error);
+        return data ? asDoc(data) : { id, exists:false, data:()=>undefined, metadata:{} };
+      },
+      set: async (body)=>{
+        const { error } = await sb.from(table).upsert({ id, data: body, updated_at: new Date().toISOString() });
+        if (error) throw toErr(error);
+      },
+      update: async (patch)=>{
+        const { data, error } = await sb.from(table).select('data').eq('id', id).maybeSingle();
+        if (error) throw toErr(error);
+        if (!data) throw { code:'invalid_argument', message:'ไม่พบข้อมูลที่จะแก้ อาจถูกลบไปแล้ว' };
+        const merged = Object.assign({}, data.data||{}, patch);
+        const { error: e2 } = await sb.from(table).update({ data: merged, updated_at: new Date().toISOString() }).eq('id', id);
+        if (e2) throw toErr(e2);
+      },
+      delete: async ()=>{
+        const { error } = await sb.from(table).delete().eq('id', id);
+        if (error) throw toErr(error);
+      },
+      onSnapshot: ()=>()=>{},
+      collection: ()=>null,
+      acquire: async ()=>({acquired:true})
+    };
+  }
+
+  function collRef(table){
+    return {
+      path: table,
+      doc: (id)=>docRef(table, id || newId()),
+      add: async (body)=>{
+        const id = newId();
+        const { error } = await sb.from(table).insert({ id, data: body });
+        if (error) throw toErr(error);
+        return docRef(table, id);
+      },
+      get: async ()=>{
+        const { data, error } = await sb.from(table).select('id,data');
+        if (error) throw toErr(error);
+        return asSnap(data||[]);
+      },
+      onSnapshot: (next, onError)=>{
+        let alive = true;
+        const pull = async ()=>{
+          const { data, error } = await sb.from(table).select('id,data');
+          if (!alive) return;
+          if (error) { onError && onError(toErr(error)); return; }
+          next(asSnap(data||[]));
+        };
+        pull();
+        const ch = sb.channel('rt-'+table)
+          .on('postgres_changes', { event:'*', schema:'public', table }, pull)
+          .subscribe();
+        return ()=>{ alive = false; sb.removeChannel(ch); };
+      }
+    };
+  }
+
+  const db = { doc:(p)=>{ const [t,id]=split(p); return docRef(t,id); }, collection:(p)=>collRef(p) };
+
+  let opened = false;
+  function openApp(){
+    if (opened) return;
+    opened = true;
+    gate.remove();
+    window.__srcResolveDb(db);
+    const bar = document.querySelector('.top');
+    if (bar) {
+      const b = document.createElement('button');
+      b.id='signout'; b.type='button'; b.textContent='ออกจากระบบ';
+      b.addEventListener('click', async ()=>{ if(confirm('ออกจากระบบ?')){ await sb.auth.signOut(); location.reload(); } });
+      bar.appendChild(b);
+    }
+  }
+
+  const { data: sess } = await sb.auth.getSession();
+  if (sess && sess.session) openApp();
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const btn = form.querySelector('button');
+    const f = new FormData(form);
+    errBox.textContent=''; btn.disabled=true; btn.textContent='กำลังเข้าใช้งาน…';
+    const { error } = await sb.auth.signInWithPassword({ email:String(f.get('email')).trim(), password:String(f.get('password')) });
+    if (error) {
+      const m = String(error.message||'');
+      errBox.textContent = /invalid login/i.test(m) ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+        : /email not confirmed/i.test(m) ? 'อีเมลนี้ยังไม่ยืนยัน ให้เจ้าของร้านกด Confirm ในหน้า Supabase'
+        : /rate|too many/i.test(m) ? 'ลองผิดหลายครั้งเกินไป รอสักครู่แล้วลองใหม่'
+        : /fetch|network/i.test(m) ? 'เชื่อมต่ออินเทอร์เน็ตไม่ได้'
+        : 'เข้าใช้งานไม่สำเร็จ: ' + m;
+      btn.disabled=false; btn.textContent='เข้าใช้งาน';
+      return;
+    }
+    openApp();
+  });
+}
+</script>

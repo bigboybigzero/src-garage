@@ -1,0 +1,69 @@
+<meta charset="utf-8">
+<style>
+#demo-bar{position:fixed;left:12px;bottom:14px;z-index:9;display:flex;gap:10px;align-items:center;background:#141d26;color:#fff;border-radius:999px;padding:8px 14px;font:13.5px/1.4 Anuphan,system-ui,sans-serif;box-shadow:0 6px 20px #0003;max-width:calc(100vw - 24px);flex-wrap:wrap}
+#demo-bar b{font-weight:600}
+#demo-bar button{font:inherit;background:none;border:1px solid #ffffff59;color:#fff;border-radius:999px;padding:3px 10px;cursor:pointer}
+@media(max-width:640px){#demo-bar{left:8px;right:8px;bottom:8px;font-size:12.5px}}
+</style>
+<script>
+(function(){
+  const KEY='srcgarage_demo_v1';
+  const clone=(o)=>JSON.parse(JSON.stringify(o));
+  const SEED={
+    services:{
+      sv1:{name:'ติดฟิล์มกรองแสงรอบคัน',priceSatang:350000},
+      sv2:{name:'ชุดแต่งรอบคัน',priceSatang:1200000},
+      sv3:{name:'ล้อแม็กพร้อมยาง',priceSatang:1800000},
+      sv4:{name:'เครื่องเสียงรถยนต์',priceSatang:800000},
+      sv5:{name:'เคลือบสี / เคลือบแก้ว',priceSatang:600000},
+      sv6:{name:'สปอยเลอร์',priceSatang:450000}
+    },
+    customers:{
+      c1:{name:'สมชาย ก.',phone:'08x-xxx-1111',note:''},
+      c2:{name:'อรทัย ข.',phone:'08x-xxx-2222',note:''},
+      c3:{name:'ธนา ค.',phone:'08x-xxx-3333',note:''}
+    },
+    vehicles:{
+      v1:{plate:'1กก1234',plateKey:'1กก1234',brand:'Toyota',model:'Yaris',color:'ขาว',customerId:'c1'},
+      v2:{plate:'2ขข5678',plateKey:'2ขข5678',brand:'Honda',model:'Civic',color:'เทา',customerId:'c2'},
+      v3:{plate:'3คค9012',plateKey:'3คค9012',brand:'Isuzu',model:'D-Max',color:'ดำ',customerId:'c3'}
+    },
+    jobs:{
+      j1:{vehicleId:'v1',dateIn:'2026-07-12',datePromised:'2026-07-13',status:'delivered',techName:'ช่างเอ',note:'',receivedSatang:350000,items:[{name:'ติดฟิล์มกรองแสงรอบคัน',priceSatang:350000}]},
+      j2:{vehicleId:'v1',dateIn:'2026-09-04',datePromised:'2026-09-09',status:'in_progress',techName:'ช่างเอ',note:'ลูกค้าขอล้อสีดำด้าน',receivedSatang:1000000,items:[{name:'ชุดแต่งรอบคัน',priceSatang:1200000},{name:'ล้อแม็กพร้อมยาง',priceSatang:1800000}]},
+      j3:{vehicleId:'v2',dateIn:'2026-09-05',datePromised:'2026-09-07',status:'received',techName:'ช่างบี',note:'',receivedSatang:0,items:[{name:'เครื่องเสียงรถยนต์',priceSatang:800000}]},
+      j4:{vehicleId:'v3',dateIn:'2026-09-01',datePromised:'2026-09-04',status:'ready',techName:'ช่างบี',note:'โทรแจ้งแล้ว รอลูกค้าว่าง',receivedSatang:200000,items:[{name:'สปอยเลอร์',priceSatang:450000}]},
+      j5:{vehicleId:'v2',dateIn:'2026-08-18',datePromised:'2026-08-20',status:'delivered',techName:'ช่างเอ',note:'',receivedSatang:400000,items:[{name:'เคลือบสี / เคลือบแก้ว',priceSatang:600000}]}
+    }
+  };
+  const load=()=>{try{return JSON.parse(localStorage.getItem(KEY))||null}catch(e){return null}};
+  const save=(d)=>{try{localStorage.setItem(KEY,JSON.stringify(d))}catch(e){}};
+  let store=load()||clone(SEED);
+  save(store);
+  const listeners=[];
+  function snap(coll){const m=store[coll]||{};const docs=Object.keys(m).sort().map(id=>({id,exists:true,data:()=>m[id],metadata:{fromCache:false,hasPendingWrites:false}}));return{docs,size:docs.length,empty:!docs.length,docChanges:()=>[],metadata:{fromCache:false,hasPendingWrites:false}};}
+  function emitAll(){save(store);listeners.forEach(l=>l.cb(snap(l.coll)));}
+  const uid=()=>'d'+Math.random().toString(36).slice(2,10);
+  const docRef=(coll,id)=>({id,path:coll+'/'+id,
+    get:async()=>({id,exists:!!(store[coll]&&store[coll][id]),data:()=>store[coll]&&store[coll][id],metadata:{}}),
+    set:async(d)=>{store[coll]=store[coll]||{};store[coll][id]=clone(d);emitAll();},
+    update:async(d)=>{if(!store[coll]||!store[coll][id])throw{code:'invalid_argument',message:'ไม่มีเอกสารนี้'};Object.assign(store[coll][id],clone(d));emitAll();},
+    delete:async()=>{if(store[coll])delete store[coll][id];emitAll();},
+    onSnapshot:()=>()=>{},collection:()=>null,acquire:async()=>({acquired:true})});
+  const collRef=(coll)=>({path:coll,
+    doc:(id)=>docRef(coll,id||uid()),
+    add:async(d)=>{const id=uid();store[coll]=store[coll]||{};store[coll][id]=clone(d);emitAll();return docRef(coll,id);},
+    onSnapshot:(next)=>{listeners.push({coll,cb:next});setTimeout(()=>next(snap(coll)),0);return()=>{};}});
+  window.claude={use:async(n)=>n==='db'?{doc:(p)=>{const a=p.split('/');return docRef(a[0],a[1]);},collection:collRef}:null};
+  window.addEventListener('DOMContentLoaded',()=>{
+    const bar=document.createElement('div');
+    bar.id='demo-bar';
+    bar.innerHTML='<b>โหมดสาธิต</b><span>ลองกดได้ทุกปุ่ม · ข้อมูลที่กรอกเก็บในเบราว์เซอร์ของคุณเครื่องเดียว ไม่ส่งไปไหน</span><button type="button">ล้างกลับเป็นข้อมูลตัวอย่าง</button>';
+    bar.querySelector('button').addEventListener('click',()=>{
+      if(!confirm('ล้างข้อมูลที่กรอกไว้ แล้วกลับไปเป็นข้อมูลตัวอย่างเริ่มต้น?'))return;
+      store=clone(SEED);emitAll();
+    });
+    document.body.appendChild(bar);
+  });
+})();
+</script>
