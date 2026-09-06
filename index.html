@@ -1,0 +1,1064 @@
+<meta charset="utf-8">
+<!-- ===== ชั้นเชื่อมฐานข้อมูล Supabase สำหรับเว็บของร้าน =====
+     แก้เฉพาะ 2 ค่าในบล็อกด้านล่าง (ทั้งคู่เป็นค่าสาธารณะ ใส่ในเว็บได้ ไม่ใช่รหัสลับ)
+     ห้ามเอา service_role key มาใส่ที่นี่เด็ดขาด -->
+<script>
+window.SRC_SUPABASE = {
+  url:     "https://caawyycsvqzyrblbcxko.supabase.co",
+  anonKey: "sb_publishable_wva8Bh0DHH1DpInq1VOovA_6MWO5q0r"
+};
+</script>
+<style>
+#gate{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;background:#0e161e;color:#e7eef5;font:16px/1.6 Anuphan,"IBM Plex Sans Thai",system-ui,sans-serif}
+#gate .box{width:100%;max-width:380px;background:#17222c;border:1px solid #2c3a48;border-radius:14px;padding:26px;display:flex;flex-direction:column;gap:14px}
+#gate h1{font:700 24px/1.3 "IBM Plex Sans Thai",Anuphan,system-ui,sans-serif;margin:0;display:flex;align-items:center;gap:10px}
+#gate h1 i{width:10px;height:24px;border-radius:2px;background:#8fb0ff;display:inline-block}
+#gate p{margin:0;color:#93a4b5;font-size:14px}
+#gate label{display:flex;flex-direction:column;gap:5px;font-size:13.5px;color:#93a4b5;font-weight:500}
+#gate input{font:inherit;padding:10px 12px;border-radius:9px;border:1px solid #2c3a48;background:#0e161e;color:#e7eef5;width:100%}
+#gate form{display:flex;flex-direction:column;gap:12px}
+#gate button{font:inherit;font-weight:600;padding:11px 16px;border:0;border-radius:9px;background:#8fb0ff;color:#0e161e;cursor:pointer}
+#gate button[disabled]{opacity:.5;cursor:default}
+#gate .err{color:#f08a8a;font-size:14px;min-height:20px;margin:0}
+#signout{margin-left:8px;font:inherit;font-size:13.5px;font-weight:500;background:none;border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:5px 12px;cursor:pointer}
+</style>
+<div id="gate"><div class="box">
+  <h1><i></i>SRC garage</h1>
+  <p id="gate-note">ใส่อีเมลและรหัสของร้านเพื่อเข้าใช้งาน</p>
+  <form id="gate-form">
+    <label>อีเมลของร้าน<input name="email" type="email" autocomplete="username" required></label>
+    <label>รหัสผ่าน<input name="password" type="password" autocomplete="current-password" required></label>
+    <p class="err" id="gate-err"></p>
+    <button type="submit">เข้าใช้งาน</button>
+  </form>
+</div></div>
+<script>
+(function(){
+  let resolveDb; const dbReady = new Promise(r=>{resolveDb=r;});
+  window.__srcResolveDb = (v)=>resolveDb(v);
+  const downloads = {
+    save: async ({filename, data})=>{
+      const blob = data instanceof Blob ? data : new Blob([data], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename || 'backup.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+      return {status:'saved'};
+    }
+  };
+  window.claude = { use: async (name)=> name==='db' ? dbReady : (name==='downloads' ? downloads : null) };
+})();
+</script>
+<script type="module">
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+const CFG = window.SRC_SUPABASE || {};
+const gate = document.getElementById('gate');
+const note = document.getElementById('gate-note');
+const form = document.getElementById('gate-form');
+const errBox = document.getElementById('gate-err');
+const TABLES = ['customers','vehicles','jobs','services'];
+
+if (String(CFG.url||'').startsWith('PASTE')) {
+  note.textContent = 'หน้านี้ยังไม่ได้ต่อฐานข้อมูลของร้าน — ใส่ค่า Project URL และ anon key ใน _supabase-adapter.html ก่อน (ดู SUPABASE-SETUP.md)';
+  form.hidden = true;
+} else {
+  const sb = createClient(CFG.url, CFG.anonKey, { auth: { persistSession: true, autoRefreshToken: true } });
+  const toErr = (e)=>({ code:(e&&e.code)||'unavailable', message:(e&&(e.message||e.hint))||'เชื่อมต่อฐานข้อมูลไม่ได้' });
+  const asDoc = (row)=>({ id:row.id, exists:true, data:()=>row.data||{}, metadata:{fromCache:false,hasPendingWrites:false} });
+  const asSnap = (rows)=>({ docs:rows.map(asDoc), size:rows.length, empty:rows.length===0, docChanges:()=>[], metadata:{fromCache:false,hasPendingWrites:false} });
+  const split = (path)=>{ const i = path.indexOf('/'); return [path.slice(0,i), path.slice(i+1)]; };
+  const newId = ()=> (crypto.randomUUID ? crypto.randomUUID() : 'x'+Date.now()+Math.random().toString(36).slice(2,8));
+
+  function docRef(table, id){
+    return {
+      id, path: table+'/'+id,
+      get: async ()=>{
+        const { data, error } = await sb.from(table).select('id,data').eq('id', id).maybeSingle();
+        if (error) throw toErr(error);
+        return data ? asDoc(data) : { id, exists:false, data:()=>undefined, metadata:{} };
+      },
+      set: async (body)=>{
+        const { error } = await sb.from(table).upsert({ id, data: body, updated_at: new Date().toISOString() });
+        if (error) throw toErr(error);
+      },
+      update: async (patch)=>{
+        const { data, error } = await sb.from(table).select('data').eq('id', id).maybeSingle();
+        if (error) throw toErr(error);
+        if (!data) throw { code:'invalid_argument', message:'ไม่พบข้อมูลที่จะแก้ อาจถูกลบไปแล้ว' };
+        const merged = Object.assign({}, data.data||{}, patch);
+        const { error: e2 } = await sb.from(table).update({ data: merged, updated_at: new Date().toISOString() }).eq('id', id);
+        if (e2) throw toErr(e2);
+      },
+      delete: async ()=>{
+        const { error } = await sb.from(table).delete().eq('id', id);
+        if (error) throw toErr(error);
+      },
+      onSnapshot: ()=>()=>{},
+      collection: ()=>null,
+      acquire: async ()=>({acquired:true})
+    };
+  }
+
+  function collRef(table){
+    return {
+      path: table,
+      doc: (id)=>docRef(table, id || newId()),
+      add: async (body)=>{
+        const id = newId();
+        const { error } = await sb.from(table).insert({ id, data: body });
+        if (error) throw toErr(error);
+        return docRef(table, id);
+      },
+      get: async ()=>{
+        const { data, error } = await sb.from(table).select('id,data');
+        if (error) throw toErr(error);
+        return asSnap(data||[]);
+      },
+      onSnapshot: (next, onError)=>{
+        let alive = true;
+        const pull = async ()=>{
+          const { data, error } = await sb.from(table).select('id,data');
+          if (!alive) return;
+          if (error) { onError && onError(toErr(error)); return; }
+          next(asSnap(data||[]));
+        };
+        pull();
+        const ch = sb.channel('rt-'+table)
+          .on('postgres_changes', { event:'*', schema:'public', table }, pull)
+          .subscribe();
+        return ()=>{ alive = false; sb.removeChannel(ch); };
+      }
+    };
+  }
+
+  const db = { doc:(p)=>{ const [t,id]=split(p); return docRef(t,id); }, collection:(p)=>collRef(p) };
+
+  let opened = false;
+  function openApp(){
+    if (opened) return;
+    opened = true;
+    gate.remove();
+    window.__srcResolveDb(db);
+    const bar = document.querySelector('.top');
+    if (bar) {
+      const b = document.createElement('button');
+      b.id='signout'; b.type='button'; b.textContent='ออกจากระบบ';
+      b.addEventListener('click', async ()=>{ if(confirm('ออกจากระบบ?')){ await sb.auth.signOut(); location.reload(); } });
+      bar.appendChild(b);
+    }
+  }
+
+  const { data: sess } = await sb.auth.getSession();
+  if (sess && sess.session) openApp();
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const btn = form.querySelector('button');
+    const f = new FormData(form);
+    errBox.textContent=''; btn.disabled=true; btn.textContent='กำลังเข้าใช้งาน…';
+    const { error } = await sb.auth.signInWithPassword({ email:String(f.get('email')).trim(), password:String(f.get('password')) });
+    if (error) {
+      const m = String(error.message||'');
+      errBox.textContent = /invalid login/i.test(m) ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+        : /email not confirmed/i.test(m) ? 'อีเมลนี้ยังไม่ยืนยัน ให้เจ้าของร้านกด Confirm ในหน้า Supabase'
+        : /rate|too many/i.test(m) ? 'ลองผิดหลายครั้งเกินไป รอสักครู่แล้วลองใหม่'
+        : /fetch|network/i.test(m) ? 'เชื่อมต่ออินเทอร์เน็ตไม่ได้'
+        : 'เข้าใช้งานไม่สำเร็จ: ' + m;
+      btn.disabled=false; btn.textContent='เข้าใช้งาน';
+      return;
+    }
+    openApp();
+  });
+}
+</script>
+<title>SRC garage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anuphan:wght@400;500;600&family=IBM+Plex+Sans+Thai:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+:root{
+  --bg:#f2f5f8; --surface:#ffffff; --surface-2:#e9eef4; --line:#d5dee7;
+  --ink:#141d26; --muted:#5b6a7a; --accent:#1746c4; --accent-soft:#e3eafc; --on-accent:#ffffff;
+  --warn:#9a5406; --warn-soft:#fbeedc; --ok:#146b4c; --ok-soft:#dff0e7; --danger:#a32020; --danger-soft:#fbe4e4;
+  --ready:#0b6b6b; --ready-soft:#d9f0f0;
+  --plate-bg:#ffffff; --plate-ink:#101010; --plate-line:#101010;
+  --radius:12px; --shadow:0 1px 2px #141d260f, 0 8px 24px #141d260a;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e161e; --surface:#17222c; --surface-2:#1e2b37; --line:#2c3a48;
+    --ink:#e7eef5; --muted:#93a4b5; --accent:#8fb0ff; --accent-soft:#1d2c47; --on-accent:#0e161e;
+    --warn:#e2a35f; --warn-soft:#33261a; --ok:#63c69c; --ok-soft:#16302a; --danger:#f08a8a; --danger-soft:#3a1f1f;
+    --ready:#63c8c8; --ready-soft:#12302f;
+    --shadow:0 1px 2px #0006, 0 10px 28px #0004;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e161e; --surface:#17222c; --surface-2:#1e2b37; --line:#2c3a48;
+  --ink:#e7eef5; --muted:#93a4b5; --accent:#8fb0ff; --accent-soft:#1d2c47; --on-accent:#0e161e;
+  --warn:#e2a35f; --warn-soft:#33261a; --ok:#63c69c; --ok-soft:#16302a; --danger:#f08a8a; --danger-soft:#3a1f1f;
+  --ready:#63c8c8; --ready-soft:#12302f;
+  --shadow:0 1px 2px #0006, 0 10px 28px #0004;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Anuphan,"IBM Plex Sans Thai",system-ui,sans-serif}
+h1,h2,h3{font-family:"IBM Plex Sans Thai",Anuphan,system-ui,sans-serif;text-wrap:balance;margin:0}
+h1{font-size:26px;font-weight:700;letter-spacing:-.01em}
+h2{font-size:18px;font-weight:600}
+h3{font-size:15px;font-weight:600}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+
+.top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);padding:10px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.brand{font-family:"IBM Plex Sans Thai";font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
+.brand span.mark{width:10px;height:22px;border-radius:2px;background:var(--accent);display:inline-block}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+.tabs a{display:inline-block;padding:7px 13px;border-radius:999px;text-decoration:none;color:var(--muted);font-size:14.5px;font-weight:500}
+.tabs a:hover{background:var(--surface-2);color:var(--ink)}
+.tabs a.on{background:var(--ink);color:var(--surface)}
+main{max-width:1060px;margin:0 auto;padding:24px 20px 80px;display:flex;flex-direction:column;gap:20px}
+.head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.head p{margin:0;color:var(--muted);font-size:14.5px}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px;display:flex;flex-direction:column;gap:14px}
+.panel.flat{background:transparent;border:0;padding:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-family:"IBM Plex Mono",monospace;font-size:30px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+.tile small{color:var(--muted);font-size:13px}
+
+.plate{display:inline-flex;align-items:center;justify-content:center;background:var(--plate-bg);color:var(--plate-ink);border:2px solid var(--plate-line);border-radius:5px;padding:3px 10px;font-family:"IBM Plex Sans Thai";font-weight:700;font-size:16px;letter-spacing:.06em;text-decoration:none;white-space:nowrap}
+a.plate:hover{background:var(--accent-soft);color:var(--plate-ink)}
+
+.jobcard{display:grid;grid-template-columns:5px 1fr;gap:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.jobcard .stripe{background:var(--muted)}
+.jobcard.received .stripe{background:var(--warn)}
+.jobcard.in_progress .stripe{background:var(--accent)}
+.jobcard.ready .stripe{background:var(--ready)}
+.jobcard.delivered .stripe{background:var(--ok)}
+.jobcard .body{padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.jobcard form.payrow{margin:0}
+.jobrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.jobrow .grow{flex:1;min-width:180px}
+.meta{color:var(--muted);font-size:14px}
+.chip{display:inline-block;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:600;background:var(--surface-2);color:var(--muted)}
+.chip.received{background:var(--warn-soft);color:var(--warn)}
+.chip.in_progress{background:var(--accent-soft);color:var(--accent)}
+.chip.ready{background:var(--ready-soft);color:var(--ready)}
+.chip.delivered{background:var(--ok-soft);color:var(--ok)}
+.chip.debt{background:var(--danger-soft);color:var(--danger)}
+.chip.sample{background:var(--surface-2);color:var(--muted);font-weight:500}
+.money{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;font-weight:600}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+th{font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tfoot td{font-weight:600;border-top:1px solid var(--line)}
+
+button,.btn{font:inherit;font-weight:600;font-size:14.5px;border:1px solid transparent;border-radius:9px;padding:9px 15px;cursor:pointer;background:var(--ink);color:var(--surface);text-decoration:none;display:inline-flex;align-items:center;gap:7px}
+button.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+button.ghost:hover{background:var(--surface-2)}
+button.link{background:none;border:0;color:var(--accent);padding:4px 0;font-weight:500}
+button.danger{background:transparent;color:var(--danger);border-color:var(--line)}
+button[disabled]{opacity:.45;cursor:not-allowed}
+.actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+
+form{display:flex;flex-direction:column;gap:14px}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+label{display:flex;flex-direction:column;gap:5px;font-size:13.5px;color:var(--muted);font-weight:500}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:9px 11px;width:100%}
+input:disabled{background:var(--surface-2);color:var(--muted)}
+textarea{min-height:64px;resize:vertical}
+.hint{color:var(--muted);font-size:13.5px;margin:0}
+.searchbar{display:flex;gap:10px;flex-wrap:wrap}
+.searchbar input{flex:1;min-width:200px;font-size:19px;font-weight:600;letter-spacing:.04em;padding:12px 14px}
+
+.empty{color:var(--muted);padding:6px 0;margin:0}
+.notice{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius);padding:14px 16px;color:var(--ink);font-size:14.5px}
+.notice b{font-family:"IBM Plex Sans Thai"}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;background:var(--ink);color:var(--surface);padding:11px 18px;border-radius:999px;font-size:14.5px;font-weight:500;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .18s}
+#toast.show{opacity:1}
+#toast.bad{background:var(--danger);color:#fff}
+.itemrow{display:grid;grid-template-columns:1fr 140px auto;gap:10px;align-items:end}
+.payrow{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;padding:12px 16px;border-top:1px dashed var(--line);background:var(--surface-2)}
+.payrow label{flex:0 0 160px}
+.payrow .note{color:var(--muted);font-size:13px;align-self:center}
+.svcrow{display:grid;grid-template-columns:1fr 150px auto auto;gap:10px;align-items:end;padding:0;border:0;background:none;margin:0}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:640px){
+  main{padding:18px 14px 70px}
+  h1{font-size:22px}
+  .top{padding:10px 14px}
+  .tabs{margin-left:0;width:100%}
+  .itemrow,.svcrow{grid-template-columns:1fr;gap:8px}
+}
+</style>
+
+<header class="top">
+  <div class="brand"><span class="mark"></span>SRC garage</div>
+  <nav class="tabs" id="tabs">
+    <a href="#search">ค้นทะเบียน</a>
+    <a href="#open">งานค้าง</a>
+    <a href="#done">รถที่เสร็จแล้ว</a>
+    <a href="#new">รับรถเข้า</a>
+    <a href="#customers">ข้อมูลลูกค้า</a>
+    <a href="#vehicles">รถ</a>
+    <a href="#services">รายการงาน</a>
+    <a href="#backup">สำรองข้อมูล</a>
+  </nav>
+</header>
+<main id="app"><p class="empty">กำลังเชื่อมฐานข้อมูล…</p></main>
+<div id="toast" role="status"></div>
+
+<script>
+const STATUS = { received:'รับรถ', in_progress:'กำลังทำ', ready:'ทำเสร็จ รอลูกค้ามารับ', delivered:'ลูกค้ารับรถแล้ว' };
+const NEXT = { received:'in_progress', in_progress:'ready', ready:'delivered', delivered:null };
+const NEXT_LABEL = { received:'เริ่มลงมือทำ', in_progress:'งานเสร็จ รอลูกค้ามารับ', ready:'ลูกค้ามารับรถแล้ว' };
+const OPEN = ['received','in_progress'];
+
+const S = { db:null, downloads:null, mode:'loading', customers:[], vehicles:[], jobs:[], services:[], seen:{customers:false,vehicles:false,jobs:false,services:false}, formRoute:false, stale:false };
+
+const $ = (sel,root=document)=>root.querySelector(sel);
+const app = ()=>document.getElementById('app');
+const esc = (v)=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const normPlate = (v)=>String(v||'').replace(/[\s-]/g,'').toUpperCase();
+const baht = (satang)=>(Number(satang||0)/100).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const today = ()=>new Date().toISOString().slice(0,10);
+const TH_DAYS=['วันอาทิตย์','วันจันทร์','วันอังคาร','วันพุธ','วันพฤหัสบดี','วันศุกร์','วันเสาร์'];
+const TH_MONTHS=['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+function fmtDate(iso){
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso||''));
+  if(!m) return iso?String(iso):'—';
+  const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+  if(isNaN(d.getTime())) return String(iso);
+  return TH_DAYS[d.getDay()]+' '+d.getDate()+' '+TH_MONTHS[d.getMonth()]+' '+d.getFullYear();
+}
+function fmtDateTime(iso){
+  const d=new Date(iso||'');
+  if(!iso||isNaN(d.getTime())) return '—';
+  const hh=String(d.getHours()).padStart(2,'0'), mm=String(d.getMinutes()).padStart(2,'0');
+  return TH_DAYS[d.getDay()]+' '+d.getDate()+' '+TH_MONTHS[d.getMonth()]+' '+d.getFullYear()+' เวลา '+hh+'.'+mm+' น.';
+}
+const bySatang = (v)=>{ const n=Number(String(v).trim()===''?0:v); return Number.isFinite(n)?Math.round(n*100):NaN; };
+
+function toast(msg,bad){ const t=document.getElementById('toast'); t.textContent=msg; t.className='show'+(bad?' bad':''); clearTimeout(t._id); t._id=setTimeout(()=>{t.className='';},2600); }
+function fail(e){ const code=e&&e.code||''; if(code==='revoked'){S.mode='revoked';render();return;} toast(e&&e.message?('บันทึกไม่สำเร็จ: '+e.message):'บันทึกไม่สำเร็จ',true); }
+
+const customer = (id)=>S.customers.find(c=>c.id===id);
+const vehicle = (id)=>S.vehicles.find(v=>v.id===id);
+const job = (id)=>S.jobs.find(j=>j.id===id);
+const itemsOf = (j)=>Array.isArray(j&&j.items)?j.items:[];
+const totalOf = (j)=>itemsOf(j).reduce((s,i)=>s+Number(i.priceSatang||0),0);
+const receivedOf = (j)=>Number(j&&(j.receivedSatang!=null?j.receivedSatang:j.depositSatang)||0);
+const balanceOf = (j)=>totalOf(j)-receivedOf(j);
+const jobsOfVehicle = (vid)=>S.jobs.filter(j=>j.vehicleId===vid).sort((a,b)=>String(b.dateIn).localeCompare(String(a.dateIn))||String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+const vehiclesOfCustomer = (cid)=>S.vehicles.filter(v=>v.customerId===cid);
+const readyJobs = ()=>S.jobs.filter(j=>j.status==='ready').sort((a,b)=>String(a.datePromised||'9999').localeCompare(String(b.datePromised||'9999')));
+const deliveredJobs = ()=>S.jobs.filter(j=>j.status==='delivered').sort((a,b)=>String(b.dateIn).localeCompare(String(a.dateIn)));
+const unpaidJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)>0);
+const settledJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)<=0);
+const openJobs = ()=>S.jobs.filter(j=>OPEN.includes(j.status)).sort((a,b)=>String(a.datePromised||'9999').localeCompare(String(b.datePromised||'9999')));
+const serviceById = (id)=>S.services.find(x=>x.id===id);
+const sortedServices = ()=>S.services.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'th'));
+function serviceOptions(){ return sortedServices().map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); }
+function itemRowHTML(withDrop){
+  return `<div class="itemrow">
+    <label>รายการงาน
+      <select name="itemService"><option value="">— เลือกรายการ —</option>${serviceOptions()}<option value="__other__">อื่น ๆ (พิมพ์เอง)</option></select>
+      <input name="itemName" placeholder="พิมพ์ชื่อรายการเอง" hidden>
+    </label>
+    <label>ราคา (บาท)<input name="itemPrice" type="number" min="0" step="0.01" placeholder="0.00"></label>
+    ${withDrop?'<button type="button" class="ghost" data-act="drop-row">ลบแถว</button>':'<span></span>'}
+  </div>`;
+}
+function resolveItemName(serviceId, typed){
+  if(serviceId==='__other__') return String(typed||'').trim();
+  const svc=serviceById(serviceId);
+  if(svc) return svc.name;
+  return String(typed||'').trim();
+}
+const hasSamples = ()=>S.jobs.some(x=>x.sample)||S.vehicles.some(x=>x.sample)||S.customers.some(x=>x.sample);
+const ownerOfJob = (j)=>{ const v=vehicle(j.vehicleId); return v?customer(v.customerId):null; };
+
+/* ---------- ชิ้นส่วนหน้าจอ ---------- */
+function plateLink(v){ return v ? `<a class="plate" href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a>` : '<span class="chip">ไม่พบรถ</span>'; }
+function sampleChip(rec){ return rec && rec.sample ? ' <span class="chip sample">ตัวอย่าง</span>' : ''; }
+
+function payForm(j){
+  const due=balanceOf(j);
+  if(due<=0) return '';
+  return `<form class="payrow" data-form="pay" data-id="${j.id}">
+    <label>รับเงินเพิ่ม (บาท)<input name="amount" type="number" min="0.01" step="0.01" max="${(due/100).toFixed(2)}" value="${(due/100).toFixed(2)}"></label>
+    <button type="submit">บันทึกรับเงิน</button>
+    <span class="note">ค้างอยู่ ${baht(due)} บาท · รับบางส่วนก็ได้ แก้ตัวเลขก่อนกด</span>
+  </form>`;
+}
+function jobCard(j,{showPlate=true,pay=false}={}){
+  const v = vehicle(j.vehicleId); const c = ownerOfJob(j);
+  const names = itemsOf(j).map(i=>esc(i.name)).join(' · ') || 'ยังไม่ได้ลงรายการงาน';
+  return `<article class="jobcard ${j.status}">
+    <div class="stripe"></div>
+    <div class="body">
+      <div class="jobrow">
+        ${showPlate?plateLink(v):''}
+        <div class="grow"><b>${names}</b><div class="meta">${v?esc(v.brand||'')+' '+esc(v.model||''):''}${c?' · '+esc(c.name):''}</div></div>
+        <span class="chip ${j.status}">${STATUS[j.status]}</span>
+        ${j.status==='delivered'&&balanceOf(j)>0?'<span class="chip debt">ค้างชำระ</span>':''}
+        ${j.status==='delivered'&&balanceOf(j)<=0?'<span class="chip delivered">จ่ายครบแล้ว</span>':''}
+      </div>
+      <div class="jobrow meta">
+        <span>รับรถ ${esc(fmtDate(j.dateIn))}</span><span>นัดส่ง ${esc(fmtDate(j.datePromised))}</span>
+        <span>ช่าง ${esc(j.techName||'—')}</span>
+        <span class="grow"></span>
+        <span>ยอดรวม <b class="money">${baht(totalOf(j))}</b> · รับแล้ว <b class="money">${baht(receivedOf(j))}</b> · ค้าง <b class="money">${baht(balanceOf(j))}</b></span>
+        <a class="btn ghost" href="#job/${j.id}">เปิดใบงาน</a>
+      </div>
+    </div>
+    ${pay?payForm(j):''}
+  </article>`;
+}
+
+/* ---------- หน้า: ค้นทะเบียน ---------- */
+function viewSearch(q){
+  const query = q||'';
+  const key = normPlate(query);
+  const found = key ? S.vehicles.find(v=>normPlate(v.plateKey||v.plate)===key) : null;
+  const open = openJobs();
+  let result = '';
+  if(query && !found){
+    result = `<div class="panel"><h2>ไม่พบทะเบียน "${esc(query)}"</h2>
+      <p class="hint">ตรวจตัวเลขและตัวอักษรอีกครั้ง หรือเปิดใบงานใหม่ให้รถคันนี้</p>
+      <div class="actions"><a class="btn" href="#new?plate=${encodeURIComponent(query.trim())}">รับรถคันนี้เข้า</a></div></div>`;
+  } else if(found){
+    const c = customer(found.customerId); const list = jobsOfVehicle(found.id);
+    result = `<div class="panel">
+      <div class="jobrow"><span class="plate">${esc(found.plate)}</span>
+        <div class="grow"><h2>${esc(found.brand||'')} ${esc(found.model||'')} ${found.color?'สี'+esc(found.color):''}${sampleChip(found)}</h2>
+        <div class="meta">เจ้าของ ${esc(c?c.name:'—')}${c&&c.phone?' · '+esc(c.phone):''}</div></div>
+        <a class="btn ghost" href="#vehicle/${found.id}">แก้ข้อมูลรถ/เจ้าของ</a>
+        <a class="btn" href="#new?plate=${encodeURIComponent(found.plate)}">รับรถคันนี้เข้า</a>
+      </div>
+      <p class="hint">เข้าร้านมาแล้ว <b>${list.length}</b> ครั้ง · รวมทุกครั้ง <b class="money">${baht(list.reduce((s,j)=>s+totalOf(j),0))}</b> บาท · ค้างชำระ <b class="money">${baht(list.reduce((s,j)=>s+balanceOf(j),0))}</b> บาท</p>
+      ${list.length?list.map(j=>jobCard(j,{showPlate:false})).join(''):'<p class="empty">ยังไม่มีประวัติการเข้าร้าน</p>'}
+    </div>`;
+  }
+  app().innerHTML = `
+    <div class="head"><h1>ค้นทะเบียน</h1><p>พิมพ์เลขทะเบียนแล้วเห็นประวัติทุกครั้งที่รถคันนี้เข้าร้าน</p></div>
+    <div class="panel">
+      <form data-form="search" class="searchbar">
+        <input name="plate" value="${esc(query)}" placeholder="1กก1234" autocomplete="off" inputmode="text" aria-label="เลขทะเบียนรถ">
+        <button type="submit">ค้นหา</button>
+      </form>
+      <p class="hint">เว้นวรรคหรือขีดกลางไม่มีผล · ${S.vehicles.slice(0,4).map(v=>`<a href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a>`).join(' · ')||'ยังไม่มีรถในระบบ'}</p>
+    </div>
+    ${result}
+    <div class="tiles">
+      <div class="tile"><b>${open.length}</b><small>คันค้างในร้าน</small></div>
+      <div class="tile"><b>${S.vehicles.length}</b><small>รถในระบบ</small></div>
+      <div class="tile"><b>${S.customers.length}</b><small>ลูกค้า</small></div>
+      <div class="tile"><b class="money">${baht(S.jobs.reduce((s,j)=>s+balanceOf(j),0))}</b><small>ยอดค้างรับรวม (บาท)</small></div>
+    </div>
+    ${hasSamples()?`<p class="hint">ระบบมีข้อมูลตัวอย่างอยู่ (ป้าย “ตัวอย่าง”) ใช้ลองก่อนได้ พอเริ่มใช้จริงแล้วลบทิ้ง <button class="link" data-act="purge-samples">ลบข้อมูลตัวอย่างทั้งหมด</button></p>`:''}`;
+}
+
+/* ---------- หน้า: งานค้าง ---------- */
+function viewOpen(){
+  const list = openJobs();
+  app().innerHTML = `
+    <div class="head"><h1>งานค้างในร้าน</h1><p>งานที่ยังต้องลงมือทำ เรียงตามวันนัดส่ง · รถที่ทำเสร็จแล้วดูที่หน้า <a href="#done">รถที่เสร็จแล้ว</a></p></div>
+    <div class="tiles">
+      <div class="tile"><b>${list.length}</b><small>คันที่ยังอยู่ในร้าน</small></div>
+      <div class="tile"><b>${list.filter(j=>j.status==='received').length}</b><small>รับรถ ยังไม่เริ่ม</small></div>
+      <div class="tile"><b>${list.filter(j=>j.status==='in_progress').length}</b><small>กำลังทำ</small></div>
+      <div class="tile"><b>${list.filter(j=>j.datePromised&&j.datePromised<today()).length}</b><small>เลยวันนัดส่ง</small></div>
+      <div class="tile"><b>${readyJobs().length}</b><small>ทำเสร็จ รอลูกค้ามารับ · <a href="#done">ดูรายการ</a></small></div>
+    </div>
+    <div class="panel flat">${list.length?list.map(j=>jobCard(j)).join(''):'<div class="panel"><p class="empty">ไม่มีรถค้างในร้าน</p></div>'}</div>`;
+}
+
+/* ---------- หน้า: รถที่เสร็จแล้ว ---------- */
+function viewDone(){
+  const waiting=readyJobs(), unpaid=unpaidJobs(), settled=settledJobs();
+  const unpaidSum=unpaid.reduce((s,j)=>s+balanceOf(j),0);
+  const group=(title,note,list,opts)=>`<div class="panel">
+      <div class="head"><h2>${title}</h2><p>${note}</p></div>
+      ${list.length?list.map(j=>jobCard(j,opts||{})+((opts&&opts.extra)?opts.extra(j):'')).join(''):'<p class="empty">ยังไม่มีรถในกลุ่มนี้</p>'}
+    </div>`;
+  app().innerHTML = `
+    <div class="head"><h1>รถที่เสร็จแล้ว</h1><p>งานทำเสร็จแล้ว แยกตามว่าลูกค้ามารับหรือยัง และจ่ายเงินครบหรือยัง</p></div>
+    <div class="tiles">
+      <div class="tile"><b>${waiting.length}</b><small>ลูกค้ายังไม่มารับรถ</small></div>
+      <div class="tile"><b>${unpaid.length}</b><small>รับรถไปแล้ว ยังค้างชำระ</small></div>
+      <div class="tile"><b class="money">${baht(unpaidSum)}</b><small>ยอดค้างที่ต้องตามเก็บ (บาท)</small></div>
+      <div class="tile"><b>${settled.length}</b><small>รับรถแล้ว จ่ายเงินแล้ว</small></div>
+    </div>
+    ${group('ลูกค้ายังไม่มารับรถ','งานเสร็จ รถจอดรออยู่ที่ร้าน โทรตามลูกค้าได้เลย · รับเงินหรือส่งมอบได้จากตรงนี้',waiting,{pay:true,extra:(j)=>`<div class="actions" style="margin:8px 0 14px"><button data-act="advance" data-id="${j.id}" data-to="delivered">ลูกค้ามารับรถแล้ว</button></div>`})}
+    ${group('รับรถไปแล้ว ยังค้างชำระ','รถออกจากร้านแล้วแต่ยังเก็บเงินไม่ครบ · เก็บได้เท่าไหร่ใส่ตรงนี้ได้เลย',unpaid,{pay:true})}
+    ${group('ลูกค้ารับรถแล้ว จ่ายเงินแล้ว','ปิดงานสมบูรณ์ เก็บไว้ดูประวัติ',settled.slice(0,20),null)}
+    ${settled.length>20?`<p class="hint">แสดง 20 ใบล่าสุดจากทั้งหมด ${settled.length} ใบ · ดูใบเก่ากว่านี้ได้จากการค้นทะเบียน</p>`:''}`;
+}
+
+/* ---------- หน้า: ใบงาน ---------- */
+function viewJob(id){
+  const j = job(id);
+  if(!j) return notFound('ไม่พบใบงานนี้');
+  const v = vehicle(j.vehicleId); const c = ownerOfJob(j);
+  const items = itemsOf(j); const total = totalOf(j);
+  const next = NEXT[j.status];
+  const rows = items.length ? items.map((i,idx)=>`<tr>
+      <td>${esc(i.name)}</td><td class="num money">${baht(i.priceSatang)}</td>
+      <td class="num">${j.status!=='delivered'?`<button class="link" data-act="del-item" data-id="${j.id}" data-idx="${idx}">ลบ</button>`:''}</td>
+    </tr>`).join('') : '<tr><td colspan="3" class="empty">ยังไม่ได้ลงรายการงาน</td></tr>';
+
+  app().innerHTML = `
+    <div class="head"><h1>ใบงาน ${esc(fmtDate(j.dateIn))}</h1><p>${plateLink(v)} ${sampleChip(j)}</p></div>
+
+    <div class="panel">
+      <div class="jobrow">
+        <div class="grow">
+          <h2>${esc(v?(v.brand||'')+' '+(v.model||''):'—')} ${v&&v.color?'สี'+esc(v.color):''}</h2>
+          <div class="meta">เจ้าของ ${c?`<a href="#customer/${c.id}">${esc(c.name)}</a>`:'—'}${c&&c.phone?' · '+esc(c.phone):''} · <a href="#search/${encodeURIComponent(v?v.plate:'')}">ดูประวัติรถคันนี้</a></div>
+          <div class="meta">รับรถ ${esc(fmtDate(j.dateIn))} · นัดส่ง ${esc(fmtDate(j.datePromised))} · ช่าง ${esc(j.techName||'—')}${j.lastPaymentAt?' · รับเงินล่าสุด '+esc(fmtDateTime(j.lastPaymentAt)):''}</div>
+        </div>
+        <span class="chip ${j.status}">${STATUS[j.status]}</span>
+      </div>
+      <div class="actions">
+        ${next?`<button data-act="advance" data-id="${j.id}" data-to="${next}">${NEXT_LABEL[j.status]}</button>`:'<button disabled>ปิดงานแล้ว</button>'}
+        ${j.status!=='delivered'?`<button class="danger" data-act="del-job" data-id="${j.id}">ลบใบงานนี้</button>`:''}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>รายการงานและราคา</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>รายการ</th><th class="num">ราคา (บาท)</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr><td>ยอดรวม</td><td class="num money">${baht(total)}</td><td></td></tr>
+          <tr><td>รับเงินแล้ว (รวมมัดจำ)</td><td class="num money">${baht(receivedOf(j))}</td><td></td></tr>
+          <tr><td>ยอดค้าง</td><td class="num money">${baht(balanceOf(j))}</td><td></td></tr>
+        </tfoot>
+      </table></div>
+      ${balanceOf(j)>0?payForm(j):'<p class="hint">จ่ายครบแล้ว ไม่มียอดค้าง</p>'}
+      ${j.status!=='delivered'?`
+      <form data-form="add-item" data-id="${j.id}" class="itemrow">
+        <label>เพิ่มรายการงาน
+          <select name="itemService"><option value="">— เลือกรายการ —</option>${serviceOptions()}<option value="__other__">อื่น ๆ (พิมพ์เอง)</option></select>
+          <input name="itemName" placeholder="พิมพ์ชื่อรายการเอง" hidden>
+        </label>
+        <label>ราคา (บาท)<input name="itemPrice" type="number" min="0" step="0.01" placeholder="0.00" required></label>
+        <button type="submit">เพิ่ม</button>
+      </form>
+      <p class="hint">แก้ตัวเลือกในดรอปดาวน์ได้ที่หน้า <a href="#services">รายการงาน</a></p>`:''}
+    </div>
+
+    <div class="panel">
+      <h2>รายละเอียดใบงาน</h2>
+      <form data-form="save-job" data-id="${j.id}">
+        <div class="fields">
+          <label>วันรับรถ<input name="dateIn" type="date" value="${esc(j.dateIn||'')}" required></label>
+          <label>วันนัดส่ง<input name="datePromised" type="date" value="${esc(j.datePromised||'')}"></label>
+          <label>ช่างที่รับงาน<input name="techName" value="${esc(j.techName||'')}" placeholder="ชื่อช่าง"></label>
+          <label>ยอดรับเงินสะสม แก้เมื่อคีย์ผิด (บาท)<input name="deposit" type="number" min="0" step="0.01" value="${(receivedOf(j)/100).toFixed(2)}"></label>
+        </div>
+        <label>โน้ต<textarea name="note" placeholder="สิ่งที่ลูกค้าสั่งเป็นพิเศษ">${esc(j.note||'')}</textarea></label>
+        <p class="hint">ปกติรับเงินเพิ่มให้ใช้ช่อง “รับเงินเพิ่ม” ด้านบน · ช่องนี้ไว้แก้ยอดสะสมเมื่อคีย์ผิด ใส่ได้ 0 ถึง ${baht(total)} บาท เท่ากับยอดรวมเมื่อไหร่ = จ่ายครบ</p>
+        <div class="actions"><button type="submit">บันทึก</button></div>
+      </form>
+    </div>`;
+}
+
+/* ---------- หน้า: รับรถเข้า ---------- */
+function viewNew(prefill){
+  const options = S.customers.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'th'))
+    .map(c=>`<option value="${c.id}">${esc(c.name)}${c.phone?' · '+esc(c.phone):''}</option>`).join('');
+  app().innerHTML = `
+    <div class="head"><h1>รับรถเข้า</h1><p>ถ้าทะเบียนนี้เคยเข้าร้านแล้ว ระบบจะผูกกับรถคันเดิมให้เอง ไม่สร้างซ้ำ</p></div>
+    <form data-form="new-job" class="panel">
+      <h2>รถ</h2>
+      <div class="fields">
+        <label>เลขทะเบียน *<input name="plate" value="${esc(prefill||'')}" placeholder="1กก1234" required autocomplete="off"></label>
+        <label>ยี่ห้อ<input name="brand" placeholder="Toyota"></label>
+        <label>รุ่น<input name="model" placeholder="Yaris"></label>
+        <label>สี<input name="color" placeholder="ขาว"></label>
+      </div>
+      <h2>เจ้าของรถ</h2>
+      <div class="fields">
+        <label>ลูกค้าเดิม<select name="customerId"><option value="">— ลูกค้าใหม่ —</option>${options}</select></label>
+        <label>ชื่อลูกค้าใหม่<input name="customerName" placeholder="กรอกเมื่อเป็นลูกค้าใหม่"></label>
+        <label>เบอร์โทร<input name="phone" placeholder="08x-xxx-xxxx"></label>
+      </div>
+      <p class="hint">รถที่เคยเข้าร้านแล้วจะใช้เจ้าของเดิม ช่องเจ้าของจะถูกข้ามไป</p>
+      <h2>งานครั้งนี้</h2>
+      <div class="fields">
+        <label>วันรับรถ * (วันนี้ ${fmtDate(today())})<input name="dateIn" type="date" value="${today()}" required></label>
+        <label>วันนัดส่ง<input name="datePromised" type="date"></label>
+        <label>ช่างที่รับงาน<input name="techName" placeholder="ชื่อช่าง"></label>
+        <label>มัดจำ (บาท)<input name="deposit" type="number" min="0" step="0.01" placeholder="0.00"></label>
+      </div>
+      <label>โน้ต<textarea name="note" placeholder="สิ่งที่ลูกค้าสั่งเป็นพิเศษ"></textarea></label>
+      <h3>รายการงานและราคา</h3>
+      <div id="items">${itemRowHTML(false)}</div>
+      <div class="actions"><button type="button" class="ghost" data-act="add-item-row">+ เพิ่มรายการ</button><a class="btn ghost" href="#services">แก้ตัวเลือกรายการงาน</a></div>
+      <p class="hint">มัดจำต้องไม่เกินยอดรวมของรายการงาน · เว้นว่าง = 0</p>
+      <div class="actions"><button type="submit">เปิดใบงาน</button></div>
+    </form>`;
+}
+
+/* ---------- หน้า: ลูกค้า ---------- */
+function viewCustomers(){
+  const list = S.customers.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'th'));
+  const rows = list.map(c=>{
+    const vs = vehiclesOfCustomer(c.id);
+    const js = vs.flatMap(v=>jobsOfVehicle(v.id));
+    const due = js.reduce((s,j)=>s+balanceOf(j),0);
+    return `<tr>
+      <td><a href="#customer/${c.id}">${esc(c.name)}</a>${sampleChip(c)}</td>
+      <td>${esc(c.phone||'—')}</td>
+      <td>${vs.map(v=>`<a class="plate" href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a>`).join(' ')||'—'}</td>
+      <td class="num">${js.length}</td>
+      <td class="num money">${baht(due)}</td>
+      <td><a href="#customer/${c.id}">แก้ไข</a></td>
+    </tr>`;}).join('');
+  app().innerHTML = `
+    <div class="head"><h1>ข้อมูลลูกค้า</h1><p>แก้ชื่อหรือเบอร์ได้ตลอด ประวัติงานเดิมยังผูกอยู่กับลูกค้าคนเดิม</p></div>
+    <div class="panel">
+      <h2>เพิ่มลูกค้าใหม่</h2>
+      <form data-form="add-customer" class="fields">
+        <label>ชื่อ *<input name="name" required placeholder="ชื่อ นามสกุล"></label>
+        <label>เบอร์โทร<input name="phone" placeholder="08x-xxx-xxxx"></label>
+        <label>&nbsp;<button type="submit">เพิ่มลูกค้า</button></label>
+      </form>
+    </div>
+    ${list.length?`<div class="tablewrap"><table>
+      <thead><tr><th>ชื่อ</th><th>เบอร์โทร</th><th>รถ</th><th class="num">งาน</th><th class="num">ยอดค้าง</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`:'<div class="panel"><p class="empty">ยังไม่มีลูกค้าในระบบ</p></div>'}`;
+}
+
+function viewCustomer(id){
+  const c = customer(id);
+  if(!c) return notFound('ไม่พบลูกค้าคนนี้');
+  const vs = vehiclesOfCustomer(c.id);
+  const js = vs.flatMap(v=>jobsOfVehicle(v.id)).sort((a,b)=>String(b.dateIn).localeCompare(String(a.dateIn)));
+  app().innerHTML = `
+    <div class="head"><h1>${esc(c.name)}</h1><p>ข้อมูลลูกค้า${sampleChip(c)}</p></div>
+    <div class="panel">
+      <h2>แก้ไขข้อมูลลูกค้า</h2>
+      <form data-form="save-customer" data-id="${c.id}">
+        <div class="fields">
+          <label>ชื่อ *<input name="name" value="${esc(c.name)}" required></label>
+          <label>เบอร์โทร<input name="phone" value="${esc(c.phone||'')}"></label>
+        </div>
+        <label>โน้ต<textarea name="note">${esc(c.note||'')}</textarea></label>
+        <div class="actions">
+          <button type="submit">บันทึก</button>
+          <button type="button" class="danger" data-act="del-customer" data-id="${c.id}">ลบลูกค้า</button>
+        </div>
+        <p class="hint">ลบได้เฉพาะลูกค้าที่ไม่มีรถผูกอยู่ (ตอนนี้มี ${vs.length} คัน)</p>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>รถของลูกค้า</h2>
+      ${vs.length?vs.map(v=>`<div class="jobrow">${plateLink(v)}<div class="grow">${esc(v.brand||'')} ${esc(v.model||'')} ${v.color?'สี'+esc(v.color):''}</div><a href="#vehicle/${v.id}">แก้ข้อมูลรถ</a></div>`).join(''):'<p class="empty">ยังไม่มีรถผูกกับลูกค้าคนนี้</p>'}
+    </div>
+    <div class="panel flat">${js.length?js.map(j=>jobCard(j)).join(''):''}</div>`;
+}
+
+/* ---------- หน้า: รถ ---------- */
+function viewVehicles(){
+  const rows = S.vehicles.slice().sort((a,b)=>String(a.plate).localeCompare(String(b.plate),'th')).map(v=>{
+    const c = customer(v.customerId); const js = jobsOfVehicle(v.id);
+    return `<tr>
+      <td><a class="plate" href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a></td>
+      <td>${esc(v.brand||'')} ${esc(v.model||'')} ${v.color?'สี'+esc(v.color):''}</td>
+      <td>${c?`<a href="#customer/${c.id}">${esc(c.name)}</a>`:'—'}</td>
+      <td class="num">${js.length}</td>
+      <td>${js[0]?esc(fmtDate(js[0].dateIn)):'—'}</td>
+      <td><a href="#vehicle/${v.id}">แก้ไข</a></td>
+    </tr>`;}).join('');
+  app().innerHTML = `
+    <div class="head"><h1>รถทั้งหมด</h1><p>ทะเบียนคือกุญแจของทั้งระบบ แก้ทะเบียนแล้วประวัติเดิมยังตามรถคันเดิม</p></div>
+    ${S.vehicles.length?`<div class="tablewrap"><table>
+      <thead><tr><th>ทะเบียน</th><th>รถ</th><th>เจ้าของ</th><th class="num">เข้าร้าน</th><th>ครั้งล่าสุด</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`:'<div class="panel"><p class="empty">ยังไม่มีรถในระบบ · <a href="#new">รับรถเข้าคันแรก</a></p></div>'}`;
+}
+
+function viewVehicle(id){
+  const v = vehicle(id);
+  if(!v) return notFound('ไม่พบรถคันนี้');
+  const js = jobsOfVehicle(v.id);
+  const options = S.customers.map(c=>`<option value="${c.id}"${c.id===v.customerId?' selected':''}>${esc(c.name)}</option>`).join('');
+  app().innerHTML = `
+    <div class="head"><h1><span class="plate">${esc(v.plate)}</span></h1><p>${esc(v.brand||'')} ${esc(v.model||'')}${sampleChip(v)}</p></div>
+    <div class="panel">
+      <h2>แก้ไขข้อมูลรถและเจ้าของ</h2>
+      <form data-form="save-vehicle" data-id="${v.id}">
+        <div class="fields">
+          <label>เลขทะเบียน *<input name="plate" value="${esc(v.plate)}" required></label>
+          <label>ยี่ห้อ<input name="brand" value="${esc(v.brand||'')}"></label>
+          <label>รุ่น<input name="model" value="${esc(v.model||'')}"></label>
+          <label>สี<input name="color" value="${esc(v.color||'')}"></label>
+          <label>เจ้าของ<select name="customerId">${options}</select></label>
+        </div>
+        <div class="actions">
+          <button type="submit">บันทึก</button>
+          <button type="button" class="danger" data-act="del-vehicle" data-id="${v.id}">ลบรถ</button>
+        </div>
+        <p class="hint">ลบได้เฉพาะรถที่ไม่มีใบงาน (ตอนนี้มี ${js.length} ใบ)</p>
+      </form>
+    </div>
+    <div class="panel flat">${js.map(j=>jobCard(j,{showPlate:false})).join('')||'<div class="panel"><p class="empty">ยังไม่มีใบงาน</p></div>'}</div>`;
+}
+
+/* ---------- หน้า: รายการงานมาตรฐาน ---------- */
+function viewServices(){
+  const rows = sortedServices().map(x=>`
+    <form class="svcrow" data-form="save-service" data-id="${x.id}">
+      <label>ชื่อรายการ<input name="name" value="${esc(x.name)}" required></label>
+      <label>ราคาตั้งต้น (บาท)<input name="price" type="number" min="0" step="0.01" value="${(Number(x.priceSatang||0)/100).toFixed(2)}"></label>
+      <button type="submit">บันทึก</button>
+      <button type="button" class="danger" data-act="del-service" data-id="${x.id}">ลบ</button>
+    </form>`).join('');
+  app().innerHTML = `
+    <div class="head"><h1>รายการงาน</h1><p>ตัวเลือกที่ขึ้นในดรอปดาวน์ตอนรับรถและตอนเพิ่มงานในใบงาน</p></div>
+    <div class="panel">
+      <h2>เพิ่มรายการใหม่</h2>
+      <form data-form="add-service" class="svcrow">
+        <label>ชื่อรายการ *<input name="name" required placeholder="เช่น ติดฟิล์มรอบคัน"></label>
+        <label>ราคาตั้งต้น (บาท)<input name="price" type="number" min="0" step="0.01" placeholder="0.00"></label>
+        <button type="submit">เพิ่ม</button>
+        <span></span>
+      </form>
+      <p class="hint">ราคาตั้งต้นแค่ช่วยกรอกให้เร็ว ตอนเปิดใบงานยังแก้ราคาได้ทุกครั้ง และราคาที่บันทึกในใบงานเก่าจะไม่เปลี่ยนตาม</p>
+    </div>
+    <div class="panel">
+      <h2>รายการที่มีอยู่ (${S.services.length})</h2>
+      ${rows||'<p class="empty">ยังไม่มีรายการ เพิ่มรายการแรกด้านบน</p>'}
+      <p class="hint">ลบรายการออกจากดรอปดาวน์ได้ ใบงานเก่าที่เคยใช้รายการนั้นยังเก็บชื่อและราคาเดิมไว้ครบ</p>
+    </div>`;
+}
+async function addService(f, form){
+  const name=(f.get('name')||'').trim();
+  if(!name) return toast('ต้องมีชื่อรายการ',true);
+  if(S.services.some(x=>x.name===name)) return toast('มีรายการชื่อนี้อยู่แล้ว',true);
+  const satang=bySatang(f.get('price'));
+  if(!Number.isFinite(satang)||satang<0) return toast('ราคาต้องเป็นตัวเลขไม่ติดลบ',true);
+  try{ await S.db.collection('services').add({name,priceSatang:satang,createdAt:new Date().toISOString()}); toast('เพิ่มรายการแล้ว'); form.reset(); render(); }catch(e){ fail(e); }
+}
+async function saveService(id, f){
+  const name=(f.get('name')||'').trim();
+  if(!name) return toast('ต้องมีชื่อรายการ',true);
+  if(S.services.some(x=>x.id!==id&&x.name===name)) return toast('มีรายการชื่อนี้อยู่แล้ว',true);
+  const satang=bySatang(f.get('price'));
+  if(!Number.isFinite(satang)||satang<0) return toast('ราคาต้องเป็นตัวเลขไม่ติดลบ',true);
+  try{ await S.db.doc('services/'+id).update({name,priceSatang:satang,updatedAt:new Date().toISOString()}); toast('บันทึกแล้ว'); }catch(e){ fail(e); }
+}
+async function delService(id){
+  const x=serviceById(id); if(!x) return;
+  if(!confirm('ลบ "'+x.name+'" ออกจากตัวเลือก? ใบงานเก่ายังเก็บชื่อและราคาเดิมไว้')) return;
+  try{ await S.db.doc('services/'+id).delete(); toast('ลบรายการแล้ว'); }catch(e){ fail(e); }
+}
+
+/* ---------- หน้า: สำรองข้อมูล ---------- */
+function viewBackup(){
+  const counts=`ลูกค้า ${S.customers.length} · รถ ${S.vehicles.length} · ใบงาน ${S.jobs.length} · รายการงาน ${S.services.length}`;
+  app().innerHTML = `
+    <div class="head"><h1>สำรองข้อมูล</h1><p>ดาวน์โหลดข้อมูลทั้งหมดเก็บไว้เอง และนำกลับเข้าระบบได้</p></div>
+    <div class="panel">
+      <h2>ดาวน์โหลดไฟล์สำรอง</h2>
+      <p class="hint">ได้ไฟล์ JSON หนึ่งไฟล์ ครอบคลุม${counts} · เก็บไว้ในเครื่องหรือไดรฟ์ของร้าน</p>
+      <div class="actions"><button data-act="export"${S.downloads?'':' disabled'}>ดาวน์โหลดไฟล์สำรอง (JSON)</button></div>
+      ${S.downloads?'':'<p class="hint">หน้านี้ยังดาวน์โหลดไฟล์ไม่ได้ในมุมมองปัจจุบัน</p>'}
+    </div>
+    <div class="panel">
+      <h2>นำไฟล์สำรองกลับเข้าระบบ</h2>
+      <p class="hint">เอกสารที่มี id ตรงกันจะถูกเขียนทับด้วยข้อมูลในไฟล์ ส่วนที่ไม่มีในไฟล์จะไม่ถูกลบ</p>
+      <div class="actions">
+        <input type="file" id="restore-file" accept="application/json,.json" aria-label="ไฟล์สำรอง">
+        <button data-act="import">นำเข้า</button>
+      </div>
+    </div>`;
+}
+async function exportBackup(){
+  if(!S.downloads) return toast('มุมมองนี้ดาวน์โหลดไฟล์ไม่ได้',true);
+  const payload={app:'carstyle',version:1,exportedAt:new Date().toISOString(),customers:S.customers,vehicles:S.vehicles,jobs:S.jobs,services:S.services};
+  try{
+    await S.downloads.save({filename:'src-garage-backup-'+today()+'.json',data:JSON.stringify(payload,null,2)});
+    toast('ดาวน์โหลดไฟล์สำรองแล้ว');
+  }catch(e){
+    if(e&&e.code==='declined') return;
+    toast('ดาวน์โหลดไม่สำเร็จ: '+(e&&e.message||''),true);
+  }
+}
+async function importBackup(){
+  const input=document.getElementById('restore-file');
+  const file=input&&input.files&&input.files[0];
+  if(!file) return toast('เลือกไฟล์สำรองก่อน',true);
+  let data;
+  try{ data=JSON.parse(await file.text()); }catch(e){ return toast('อ่านไฟล์ไม่ได้ ไฟล์นี้ไม่ใช่ JSON',true); }
+  const groups=[['customers',data.customers],['vehicles',data.vehicles],['jobs',data.jobs],['services',data.services||[]]];
+  if(groups.some(g=>!Array.isArray(g[1]))) return toast('ไฟล์นี้ไม่ใช่ไฟล์สำรองของระบบนี้',true);
+  const total=groups.reduce((n,g)=>n+g[1].length,0);
+  if(!confirm('นำเข้า '+total+' รายการ (ลูกค้า '+data.customers.length+' · รถ '+data.vehicles.length+' · ใบงาน '+data.jobs.length+') ?\nเอกสารที่ id ตรงกันจะถูกเขียนทับ')) return;
+  let ok=0;
+  try{
+    for(const [name,rows] of groups){
+      for(const row of rows){
+        if(!row||!row.id) continue;
+        const body=Object.assign({},row); delete body.id;
+        await S.db.doc(name+'/'+row.id).set(body); ok++;
+      }
+    }
+    toast('นำเข้าแล้ว '+ok+' รายการ');
+  }catch(e){ fail(e); }
+}
+function notFound(msg){ app().innerHTML = `<div class="panel"><h1>${esc(msg)}</h1><p><a href="#search">กลับไปหน้าค้นทะเบียน</a></p></div>`; }
+
+/* ---------- การเขียนข้อมูล ---------- */
+async function addItem(id, name, priceBaht){
+  const j = job(id); if(!j) return;
+  const satang = bySatang(priceBaht);
+  if(!String(name).trim()) return toast('เลือกรายการงาน หรือเลือก “อื่น ๆ” แล้วพิมพ์ชื่อ',true);
+  if(!Number.isFinite(satang)||satang<0) return toast('ราคาต้องเป็นตัวเลขไม่ติดลบ',true);
+  const items = itemsOf(j).concat([{name:name.trim(),priceSatang:satang}]);
+  try{ await S.db.doc('jobs/'+id).update({items,updatedAt:new Date().toISOString()}); toast('เพิ่มรายการแล้ว'); }catch(e){ fail(e); }
+}
+async function removeItem(id, idx){
+  const j = job(id); if(!j) return;
+  const items = itemsOf(j).slice(); const removed = items.splice(idx,1)[0];
+  const newTotal = items.reduce((s,i)=>s+Number(i.priceSatang||0),0);
+  if(receivedOf(j)>newTotal) return toast('ลบไม่ได้ เพราะยอดรับเงิน '+baht(receivedOf(j))+' จะเกินยอดรวมที่เหลือ — ลดยอดรับเงินก่อน',true);
+  if(!confirm('ลบรายการ "'+removed.name+'" ?')) return;
+  try{ await S.db.doc('jobs/'+id).update({items,updatedAt:new Date().toISOString()}); toast('ลบรายการแล้ว'); }catch(e){ fail(e); }
+}
+async function advance(id, to){
+  const j = job(id); if(!j) return;
+  if(j.status===to) return toast('สถานะเป็น '+STATUS[to]+' อยู่แล้ว');
+  if(NEXT[j.status]!==to) return toast('เปลี่ยนสถานะแบบนี้ไม่ได้',true);
+  try{ await S.db.doc('jobs/'+id).update({status:to,updatedAt:new Date().toISOString()}); toast('เปลี่ยนเป็น '+STATUS[to]+' แล้ว'); }catch(e){ fail(e); }
+}
+async function saveJob(id, f){
+  const j = job(id); if(!j) return;
+  const deposit = bySatang(f.get('deposit'));
+  const total = totalOf(j);
+  if(!Number.isFinite(deposit)||deposit<0) return toast('ยอดรับเงินต้องเป็นตัวเลขไม่ติดลบ',true);
+  if(deposit>total) return toast('ยอดรับเงิน '+baht(deposit)+' เกินยอดรวม '+baht(total)+' บาท',true);
+  if(!f.get('dateIn')) return toast('ต้องมีวันรับรถ',true);
+  try{
+    await S.db.doc('jobs/'+id).update({dateIn:f.get('dateIn'),datePromised:f.get('datePromised')||'',techName:(f.get('techName')||'').trim(),note:(f.get('note')||'').trim(),receivedSatang:deposit,depositSatang:deposit,updatedAt:new Date().toISOString()});
+    toast('บันทึกแล้ว'); location.hash='#job/'+id; render();
+  }catch(e){ fail(e); }
+}
+async function receivePayment(id, amountBaht){
+  const j=job(id); if(!j) return;
+  const due=balanceOf(j);
+  if(due<=0) return toast('ใบนี้จ่ายครบแล้ว');
+  const amount=bySatang(amountBaht);
+  if(!Number.isFinite(amount)||amount<=0) return toast('ใส่จำนวนเงินที่รับมามากกว่า 0',true);
+  if(amount>due) return toast('รับเกินยอดค้าง ค้างอยู่ '+baht(due)+' บาท',true);
+  const now=receivedOf(j)+amount;
+  try{
+    await S.db.doc('jobs/'+id).update({receivedSatang:now,lastPaymentAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+    toast(now>=totalOf(j)?'รับเงินครบแล้ว':'รับเงิน '+baht(amount)+' บาท · เหลือค้าง '+baht(totalOf(j)-now));
+  }catch(e){ fail(e); }
+}
+async function delJob(id){
+  const j = job(id); if(!j) return;
+  if(j.status==='delivered') return toast('ใบงานที่ส่งมอบแล้วลบไม่ได้',true);
+  if(!confirm('ลบใบงานนี้ทั้งใบ?')) return;
+  try{ await S.db.doc('jobs/'+id).delete(); toast('ลบใบงานแล้ว'); location.hash='#open'; }catch(e){ fail(e); }
+}
+async function saveCustomer(id, f){
+  const name=(f.get('name')||'').trim();
+  if(!name) return toast('ต้องมีชื่อลูกค้า',true);
+  try{ await S.db.doc('customers/'+id).update({name,phone:(f.get('phone')||'').trim(),note:(f.get('note')||'').trim(),updatedAt:new Date().toISOString()}); toast('บันทึกข้อมูลลูกค้าแล้ว'); render(); }catch(e){ fail(e); }
+}
+async function delCustomer(id){
+  if(vehiclesOfCustomer(id).length) return toast('ลบไม่ได้ ลูกค้าคนนี้ยังมีรถผูกอยู่',true);
+  if(!confirm('ลบลูกค้าคนนี้?')) return;
+  try{ await S.db.doc('customers/'+id).delete(); toast('ลบลูกค้าแล้ว'); location.hash='#customers'; }catch(e){ fail(e); }
+}
+async function addCustomer(f, form){
+  const name=(f.get('name')||'').trim();
+  if(!name) return toast('ต้องมีชื่อลูกค้า',true);
+  try{ await S.db.collection('customers').add({name,phone:(f.get('phone')||'').trim(),note:'',createdAt:new Date().toISOString()}); toast('เพิ่มลูกค้าแล้ว'); form.reset(); render(); }catch(e){ fail(e); }
+}
+async function saveVehicle(id, f){
+  const plate=(f.get('plate')||'').trim();
+  if(!plate) return toast('ต้องมีเลขทะเบียน',true);
+  const key=normPlate(plate);
+  const clash=S.vehicles.find(v=>v.id!==id&&normPlate(v.plateKey||v.plate)===key);
+  if(clash) return toast('ทะเบียนนี้มีอยู่แล้วในระบบ',true);
+  try{ await S.db.doc('vehicles/'+id).update({plate,plateKey:key,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId:f.get('customerId')||'',updatedAt:new Date().toISOString()}); toast('บันทึกข้อมูลรถแล้ว'); render(); }catch(e){ fail(e); }
+}
+async function delVehicle(id){
+  if(jobsOfVehicle(id).length) return toast('ลบไม่ได้ รถคันนี้ยังมีใบงานอยู่',true);
+  if(!confirm('ลบรถคันนี้?')) return;
+  try{ await S.db.doc('vehicles/'+id).delete(); toast('ลบรถแล้ว'); location.hash='#vehicles'; }catch(e){ fail(e); }
+}
+async function purgeSamples(){
+  if(!confirm('ลบข้อมูลตัวอย่างทั้งหมด (รถ ลูกค้า และใบงานที่ติดป้าย “ตัวอย่าง”) ?')) return;
+  try{
+    for(const j of S.jobs.filter(x=>x.sample)) await S.db.doc('jobs/'+j.id).delete();
+    for(const v of S.vehicles.filter(x=>x.sample)) await S.db.doc('vehicles/'+v.id).delete();
+    for(const c of S.customers.filter(x=>x.sample)) await S.db.doc('customers/'+c.id).delete();
+    toast('ลบข้อมูลตัวอย่างแล้ว');
+  }catch(e){ fail(e); }
+}
+async function createJob(form, f){
+  const plate=(f.get('plate')||'').trim();
+  if(!plate) return toast('ต้องมีเลขทะเบียน',true);
+  const key=normPlate(plate);
+  const dateIn=f.get('dateIn'); if(!dateIn) return toast('ต้องมีวันรับรถ',true);
+
+  const svcIds=f.getAll('itemService'), typed=f.getAll('itemName'), prices=f.getAll('itemPrice');
+  const items=[];
+  for(let i=0;i<prices.length;i++){
+    const n=resolveItemName(svcIds[i],typed[i]); const p=prices[i];
+    if(!n && String(p||'').trim()==='') continue;
+    if(!n) return toast('แถวที่ '+(i+1)+' ยังไม่ได้เลือกรายการงาน',true);
+    const s=bySatang(p);
+    if(!Number.isFinite(s)||s<0) return toast('ราคาของ "'+n+'" ต้องเป็นตัวเลขไม่ติดลบ',true);
+    items.push({name:n,priceSatang:s});
+  }
+  const total=items.reduce((s,i)=>s+i.priceSatang,0);
+  const deposit=bySatang(f.get('deposit'));
+  if(!Number.isFinite(deposit)||deposit<0) return toast('มัดจำต้องเป็นตัวเลขไม่ติดลบ',true);
+  if(deposit>total) return toast(total===0?'ใส่รายการงานและราคาก่อน แล้วค่อยรับมัดจำ':'มัดจำเกินยอดรวม '+baht(total)+' บาท',true);
+
+  let v = S.vehicles.find(x=>normPlate(x.plateKey||x.plate)===key);
+  try{
+    if(!v){
+      let customerId=f.get('customerId')||'';
+      if(!customerId){
+        const name=(f.get('customerName')||'').trim();
+        if(!name) return toast('รถคันใหม่ต้องมีชื่อเจ้าของ',true);
+        const ref=await S.db.collection('customers').add({name,phone:(f.get('phone')||'').trim(),note:'',createdAt:new Date().toISOString()});
+        customerId=ref.id;
+      }
+      const vref=await S.db.collection('vehicles').add({plate,plateKey:key,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId,createdAt:new Date().toISOString()});
+      v={id:vref.id};
+    }
+    const jref=await S.db.collection('jobs').add({
+      vehicleId:v.id,dateIn,datePromised:f.get('datePromised')||'',status:'received',
+      techName:(f.get('techName')||'').trim(),note:(f.get('note')||'').trim(),
+      depositSatang:deposit,receivedSatang:deposit,items,createdAt:new Date().toISOString()
+    });
+    toast('เปิดใบงานแล้ว');
+    location.hash='#job/'+jref.id;
+  }catch(e){ fail(e); }
+}
+
+/* ---------- events ---------- */
+document.addEventListener('submit', (e)=>{
+  const form=e.target.closest('form[data-form]'); if(!form) return;
+  e.preventDefault();
+  const kind=form.dataset.form, id=form.dataset.id, f=new FormData(form);
+  if(kind==='search'){ location.hash='#search/'+encodeURIComponent(String(f.get('plate')||'').trim()); return; }
+  if(!S.db) return toast('ยังเชื่อมฐานข้อมูลไม่ได้ จึงบันทึกไม่ได้',true);
+  if(kind==='add-item'){ addItem(id,resolveItemName(f.get('itemService'),f.get('itemName')),f.get('itemPrice')); form.reset(); form.querySelector('input[name=itemName]').hidden=true; }
+  else if(kind==='save-job') saveJob(id,f);
+  else if(kind==='save-customer') saveCustomer(id,f);
+  else if(kind==='add-customer') addCustomer(f,form);
+  else if(kind==='save-vehicle') saveVehicle(id,f);
+  else if(kind==='new-job') createJob(form,f);
+  else if(kind==='add-service') addService(f,form);
+  else if(kind==='save-service') saveService(id,f);
+  else if(kind==='pay') receivePayment(id,f.get('amount'));
+});
+document.addEventListener('click', (e)=>{
+  const b=e.target.closest('[data-act]'); if(!b) return;
+  const act=b.dataset.act, id=b.dataset.id;
+  if(act==='add-item-row'){
+    const box=document.getElementById('items');
+    const wrap=document.createElement('div'); wrap.innerHTML=itemRowHTML(true);
+    const row=wrap.firstElementChild; box.appendChild(row); row.querySelector('select').focus(); return;
+  }
+  if(act==='drop-row'){ b.closest('.itemrow').remove(); return; }
+  if(!S.db) return toast('ยังเชื่อมฐานข้อมูลไม่ได้ จึงบันทึกไม่ได้',true);
+  if(act==='advance') advance(id,b.dataset.to);
+  else if(act==='del-item') removeItem(id,Number(b.dataset.idx));
+  else if(act==='del-job') delJob(id);
+  else if(act==='del-customer') delCustomer(id);
+  else if(act==='del-vehicle') delVehicle(id);
+  else if(act==='purge-samples') purgeSamples();
+  else if(act==='export') exportBackup();
+  else if(act==='import') importBackup();
+  else if(act==='del-service') delService(id);
+
+});
+
+document.addEventListener('change',(e)=>{
+  const sel=e.target.closest('select[name="itemService"]'); if(!sel) return;
+  const scope=sel.closest('.itemrow')||sel.closest('form'); if(!scope) return;
+  const nameInput=scope.querySelector('input[name="itemName"]');
+  const priceInput=scope.querySelector('input[name="itemPrice"]');
+  const other=sel.value==='__other__';
+  if(nameInput){ nameInput.hidden=!other; if(other) nameInput.focus(); else nameInput.value=''; }
+  const svc=serviceById(sel.value);
+  if(svc&&priceInput&&!String(priceInput.value).trim()&&Number(svc.priceSatang||0)>0){
+    priceInput.value=(Number(svc.priceSatang)/100).toFixed(2);
+  }
+});
+
+/* ---------- router ---------- */
+const FORM_ROUTES=['new','backup'];
+function render(){
+  const raw=decodeURIComponent(location.hash.replace(/^#/,''))||'search';
+  const qIndex=raw.indexOf('?');
+  const path=qIndex>=0?raw.slice(0,qIndex):raw;
+  const query=qIndex>=0?raw.slice(qIndex+1):'';
+  const [page,arg]=path.split('/');
+  S.formRoute=FORM_ROUTES.includes(page);
+  document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on',a.getAttribute('href')==='#'+page));
+
+  if(S.mode==='loading'){ app().innerHTML='<div class="panel"><p class="empty">กำลังเชื่อมฐานข้อมูล…</p></div>'; return; }
+  if(S.mode!=='live'){
+    app().innerHTML=`<div class="notice"><b>เปิดฐานข้อมูลของหน้านี้ไม่ได้</b><br>
+      หน้านี้เก็บข้อมูลไว้ที่ฐานข้อมูลกลางของ Artifact จึงต้องเปิดจากบัญชี claude.ai ที่ล็อกอินอยู่ และอยู่ในองค์กรเดียวกับเจ้าของหน้า
+      ${S.mode==='revoked'?'<br>สิทธิ์เข้าถึงถูกถอนระหว่างใช้งาน ลองโหลดหน้าใหม่':''}</div>`;
+    return;
+  }
+  if(page==='search') viewSearch(arg);
+  else if(page==='open') viewOpen();
+  else if(page==='done') viewDone();
+  else if(page==='new') viewNew(new URLSearchParams(query).get('plate')||'');
+  else if(page==='job') viewJob(arg);
+  else if(page==='customers') viewCustomers();
+  else if(page==='customer') viewCustomer(arg);
+  else if(page==='vehicles') viewVehicles();
+  else if(page==='vehicle') viewVehicle(arg);
+  else if(page==='backup') viewBackup();
+  else if(page==='services') viewServices();
+  else notFound('ไม่พบหน้านี้');
+  window.scrollTo(0,0);
+}
+window.addEventListener('hashchange',()=>{ S.stale=false; render(); });
+
+function onData(){
+  if(!S.seen.customers||!S.seen.vehicles||!S.seen.jobs||!S.seen.services) return;
+  S.mode='live';
+  if(S.formRoute){ S.stale=true; return; }
+  render();
+}
+function watch(name){
+  S.db.collection(name).onSnapshot(
+    (snap)=>{ S[name]=snap.docs.map(d=>Object.assign({id:d.id},d.data())); S.seen[name]=true; onData(); },
+    (err)=>{ if(err.code==='revoked'){S.mode='revoked';render();} else { toast('อ่านข้อมูล '+name+' ไม่ได้: '+err.message,true); } }
+  );
+}
+(async function boot(){
+  const db = window.claude && claude.use ? await claude.use('db') : null;
+  if(!db){ S.mode='offline'; render(); return; }
+  S.db = db;
+  claude.use('downloads').then(d=>{ S.downloads=d; if(location.hash.indexOf('backup')>=0) render(); }).catch(()=>{});
+  ['customers','vehicles','jobs','services'].forEach(watch);
+  setTimeout(()=>{ if(S.mode==='loading'){ S.mode='live'; render(); } }, 4000);
+})();
+render();
+</script>
