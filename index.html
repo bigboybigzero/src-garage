@@ -323,7 +323,7 @@ const NEXT = { received:'in_progress', in_progress:'ready', ready:'delivered', d
 const NEXT_LABEL = { received:'เริ่มลงมือทำ', in_progress:'งานเสร็จ รอลูกค้ามารับ', ready:'ลูกค้ามารับรถแล้ว' };
 const OPEN = ['received','in_progress'];
 
-const S = { db:null, downloads:null, mode:'loading', customers:[], vehicles:[], jobs:[], services:[], deletedJobs:[], seen:{customers:false,vehicles:false,jobs:false,services:false,deletedJobs:false}, formRoute:false, stale:false };
+const S = { openFilter:'', db:null, downloads:null, mode:'loading', customers:[], vehicles:[], jobs:[], services:[], deletedJobs:[], seen:{customers:false,vehicles:false,jobs:false,services:false,deletedJobs:false}, formRoute:false, stale:false };
 
 const $ = (sel,root=document)=>root.querySelector(sel);
 const app = ()=>document.getElementById('app');
@@ -526,15 +526,29 @@ function payForm(j){
     <span class="note">ค้างอยู่ ${baht(due)} บาท · รับบางส่วนก็ได้ แก้ตัวเลขก่อนกด</span>
   </form>`;
 }
+function jobMatches(j, q){
+  const query = String(q||'').trim().toLowerCase();
+  if(!query) return true;
+  const v = vehicle(j.vehicleId); const c = ownerOfJob(j);
+  const hay = [
+    v?v.plate:'', v?normPlate(v.plate):'', v?provinceOf(v):'', v?v.brand:'', v?v.model:'', v?v.color:'',
+    c?c.name:'', c?c.phone:'', c?digitsOf(c.phone):'',
+    j.techName||'', j.note||'', STATUS[j.status]||'', j.dateIn||'', j.datePromised||'',
+    itemsOf(j).map(i=>i.name).join(' ')
+  ].join(' ').toLowerCase();
+  return query.split(/\s+/).every(part=>hay.indexOf(part)>=0);
+}
 function jobCard(j,{showPlate=true,pay=false}={}){
   const v = vehicle(j.vehicleId); const c = ownerOfJob(j);
   const names = itemsOf(j).map(i=>esc(i.name)).join(' · ') || 'ยังไม่ได้ลงรายการงาน';
+  const carName = v ? [v.brand||'', v.model||''].join(' ').trim() : '';
   return `<article class="jobcard ${j.status}">
     <div class="stripe"></div>
     <div class="body">
       <div class="jobrow">
         ${showPlate?plateLink(v):''}
-        <div class="grow"><b>${names}</b><div class="meta">${v?esc(v.brand||'')+' '+esc(v.model||''):''}${c?' · '+esc(c.name):''}</div></div>
+        <div class="grow"><b style="font-size:17px">${esc(carName||'ไม่ได้ระบุรถ')}</b>${v&&v.color?' <span class="meta">สี'+esc(v.color)+'</span>':''}${v&&provinceOf(v)?' <span class="meta">· '+esc(provinceOf(v))+'</span>':''}
+          <div class="meta">${names}${c?' · '+esc(c.name):''}</div></div>
         <span class="chip ${j.status}">${STATUS[j.status]}</span>
         ${j.status==='delivered'&&balanceOf(j)>0?'<span class="chip debt">ค้างชำระ</span>':''}
         ${j.status==='delivered'&&balanceOf(j)<=0?'<span class="chip delivered">จ่ายครบแล้ว</span>':''}
@@ -618,6 +632,18 @@ function viewSearch(q){
 }
 
 /* ---------- หน้า: งานค้าง ---------- */
+function openListHTML(){
+  const all = openJobs();
+  const q = S.openFilter;
+  const list = all.filter(j=>jobMatches(j,q));
+  const note = q ? `<p class="hint">แสดง ${list.length} จาก ${all.length} คัน · ค้นจาก "${esc(q)}"${list.length?'':' — ลองพิมพ์สั้นลง หรือกดล้างคำค้น'}</p>` : '';
+  return note + (list.length ? list.map(j=>jobCard(j)).join('')
+    : `<div class="panel"><p class="empty">${q?'ไม่มีคันไหนตรงกับคำค้นนี้':'ไม่มีรถค้างในร้าน'}</p></div>`);
+}
+function renderOpenList(){
+  const box = document.getElementById('open-list');
+  if(box) box.innerHTML = openListHTML();
+}
 function viewOpen(){
   const list = openJobs();
   app().innerHTML = `
@@ -629,7 +655,16 @@ function viewOpen(){
       <div class="tile"><b>${list.filter(j=>j.datePromised&&j.datePromised<today()).length}</b><small>เลยวันนัดส่ง</small></div>
       <div class="tile"><b>${readyJobs().length}</b><small>ทำเสร็จ รอลูกค้ามารับ · <a href="#done">ดูรายการ</a></small></div>
     </div>
-    <div class="panel flat">${list.length?list.map(j=>jobCard(j)).join(''):'<div class="panel"><p class="empty">ไม่มีรถค้างในร้าน</p></div>'}</div>`;
+    <div class="panel">
+      <form data-form="filter-open" class="searchbar">
+        <input id="open-filter" value="${esc(S.openFilter)}" placeholder="พิมพ์ยี่ห้อ รุ่น ทะเบียน ชื่อลูกค้า หรือชื่องาน" autocomplete="off" aria-label="กรองรายการงานค้าง">
+        ${S.openFilter?'<button type="button" class="ghost" data-act="clear-open-filter">ล้าง</button>':''}
+      </form>
+      <p class="hint">พิมพ์ได้เลย รายการจะกรองให้ทันที เช่น <b>civic</b> · <b>ฟิล์ม</b> · <b>5260</b> · ชื่อช่าง</p>
+    </div>
+    <div class="panel flat" id="open-list">${openListHTML()}</div>`;
+  const inp = document.getElementById('open-filter');
+  if(inp && S.openFilter){ inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
 }
 
 /* ---------- หน้า: รถที่เสร็จแล้ว ---------- */
@@ -1207,6 +1242,7 @@ document.addEventListener('submit', (e)=>{
   e.preventDefault();
   const kind=form.dataset.form, id=form.dataset.id, f=new FormData(form);
   if(kind==='search'){ location.hash='#search/'+encodeURIComponent(String(f.get('plate')||'').trim()); return; }
+  if(kind==='filter-open'){ return; }
   if(!S.db) return toast('ยังเชื่อมฐานข้อมูลไม่ได้ จึงบันทึกไม่ได้',true);
   if(kind==='add-item'){ addItem(id,resolveItemName(f.get('itemService'),f.get('itemName')),f.get('itemPrice')); form.reset(); form.querySelector('input[name=itemName]').hidden=true; }
   else if(kind==='save-job') saveJob(id,f);
@@ -1221,6 +1257,7 @@ document.addEventListener('submit', (e)=>{
 document.addEventListener('click', (e)=>{
   const b=e.target.closest('[data-act]'); if(!b) return;
   const act=b.dataset.act, id=b.dataset.id;
+  if(act==='clear-open-filter'){ S.openFilter=''; render(); return; }
   if(act==='add-item-row'){
     const box=document.getElementById('items');
     const wrap=document.createElement('div'); wrap.innerHTML=itemRowHTML(true);
@@ -1253,6 +1290,10 @@ document.addEventListener('change',(e)=>{
   if(svc&&priceInput&&!String(priceInput.value).trim()&&Number(svc.priceSatang||0)>0){
     priceInput.value=(Number(svc.priceSatang)/100).toFixed(2);
   }
+});
+
+document.addEventListener('input',(e)=>{
+  if(e.target && e.target.id==='open-filter'){ S.openFilter = e.target.value; renderOpenList(); }
 });
 
 /* ---------- router ---------- */
