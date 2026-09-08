@@ -364,6 +364,35 @@ const unpaidJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)>0);
 const settledJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)<=0);
 const openJobs = ()=>S.jobs.filter(j=>OPEN.includes(j.status)).sort((a,b)=>String(a.datePromised||'9999').localeCompare(String(b.datePromised||'9999')));
 const plateKeyOf = (v)=>normPlate(v.plateKey||v.plate);
+const PROVINCES = ['กรุงเทพมหานคร','กระบี่','กาญจนบุรี','กาฬสินธุ์','กำแพงเพชร','ขอนแก่น','จันทบุรี','ฉะเชิงเทรา','ชลบุรี','ชัยนาท','ชัยภูมิ','ชุมพร','เชียงราย','เชียงใหม่','ตรัง','ตราด','ตาก','นครนายก','นครปฐม','นครพนม','นครราชสีมา','นครศรีธรรมราช','นครสวรรค์','นนทบุรี','นราธิวาส','น่าน','บึงกาฬ','บุรีรัมย์','ปทุมธานี','ประจวบคีรีขันธ์','ปราจีนบุรี','ปัตตานี','พระนครศรีอยุธยา','พะเยา','พังงา','พัทลุง','พิจิตร','พิษณุโลก','เพชรบุรี','เพชรบูรณ์','แพร่','ภูเก็ต','มหาสารคาม','มุกดาหาร','แม่ฮ่องสอน','ยโสธร','ยะลา','ร้อยเอ็ด','ระนอง','ระยอง','ราชบุรี','ลพบุรี','ลำปาง','ลำพูน','เลย','ศรีสะเกษ','สกลนคร','สงขลา','สตูล','สมุทรปราการ','สมุทรสงคราม','สมุทรสาคร','สระแก้ว','สระบุรี','สิงห์บุรี','สุโขทัย','สุพรรณบุรี','สุราษฎร์ธานี','สุรินทร์','หนองคาย','หนองบัวลำภู','อ่างทอง','อำนาจเจริญ','อุดรธานี','อุตรดิตถ์','อุทัยธานี','อุบลราชธานี'];
+const PROVINCE_ALIAS = {'กทม':'กรุงเทพมหานคร','กทม.':'กรุงเทพมหานคร','กรุงเทพ':'กรุงเทพมหานคร','กรุงเทพฯ':'กรุงเทพมหานคร','อยุธยา':'พระนครศรีอยุธยา','โคราช':'นครราชสีมา'};
+function canonProvince(text){
+  const t = String(text||'').replace(/[\s.]/g,'');
+  if(!t) return '';
+  if(PROVINCE_ALIAS[t]) return PROVINCE_ALIAS[t];
+  const exact = PROVINCES.find(p=>p.replace(/\s/g,'')===t);
+  return exact ? exact : String(text||'').trim();
+}
+/* แยก "กค5260 พิจิตร" -> {plate:'กค5260', province:'พิจิตร'} */
+function splitPlate(text){
+  const raw = String(text||'').trim().replace(/\s+/g,' ');
+  if(!raw) return {plate:'', province:''};
+  const parts = raw.split(' ');
+  if(parts.length>1){
+    const prov = canonProvince(parts.slice(1).join(''));
+    if(PROVINCES.indexOf(prov)>=0) return {plate:parts[0].trim(), province:prov};
+  }
+  const stuck = raw.replace(/[\s-]/g,'');
+  const m = /^([0-9]{0,2}[\u0E01-\u0E2E]{1,3}[0-9]{1,4})(.+)$/.exec(stuck);
+  if(m){
+    const prov = canonProvince(m[2]);
+    if(PROVINCES.indexOf(prov)>=0) return {plate:m[1], province:prov};
+  }
+  return {plate:raw, province:''};
+}
+const provinceOf = (v)=>(v && v.province) ? v.province : '';
+const provinceDatalist = ()=>`<datalist id="province-list">${PROVINCES.map(p=>`<option value="${p}"></option>`).join('')}</datalist>`;
+
 /* แกนทะเบียน = ตัวอักษร+ตัวเลข ตัดชื่อจังหวัดและช่องว่างออก
    "กค5260 พิจิตร" -> "กค5260" · "1กก1234" -> "1กก1234" · "ก-3187 พิษณุโลก" -> "ก3187"
    ใช้ชี้ขาดว่าเป็นรถคันเดียวกัน ประวัติจะได้ไม่แตก */
@@ -389,7 +418,8 @@ function editDistance(a,b){
   return prev[b.length];
 }
 /* ค้นทะเบียน 3 ชั้น: ตรงตัว -> มีอยู่ในทะเบียน -> ตัวเลขตรง -> สะกดใกล้เคียง */
-function findVehicles(query){
+function findVehicles(queryRaw){
+  const query = splitPlate(queryRaw).plate || queryRaw;
   const q = normPlate(query);
   if(!q) return {exact:null, matches:[], mode:'none'};
   const rows = S.vehicles.map(v=>({v, key:plateKeyOf(v)}));
@@ -422,7 +452,7 @@ function vehicleLine(v){
   const js = jobsOfVehicle(v.id);
   return `<div class="jobrow" style="padding:10px 0;border-bottom:1px solid var(--line)">
     ${plateLink(v)}
-    <div class="grow"><b>${esc(v.brand||'')} ${esc(v.model||'')}</b>${v.color?' สี'+esc(v.color):''}
+    <div class="grow"><b>${esc(v.brand||'')} ${esc(v.model||'')}</b>${v.color?' สี'+esc(v.color):''}${provinceOf(v)?' · '+esc(provinceOf(v)):''}
       <div class="meta">${esc(c?c.name:'—')} · เข้าร้าน ${js.length} ครั้ง${js[0]?' · ล่าสุด '+esc(fmtDate(js[0].dateIn)):''}</div></div>
     <a class="btn ghost" href="#search/${encodeURIComponent(v.plate)}">เปิดประวัติ</a>
   </div>`;
@@ -515,6 +545,7 @@ function viewSearch(q){
     result = `<div class="panel">
       <div class="jobrow"><span class="plate">${esc(found.plate)}</span>
         <div class="grow"><h2>${esc(found.brand||'')} ${esc(found.model||'')} ${found.color?'สี'+esc(found.color):''}${sampleChip(found)}</h2>
+        <div class="meta">${provinceOf(found)?'จังหวัด '+esc(provinceOf(found)):`ยังไม่ได้ระบุจังหวัด · <a href="#vehicle/${found.id}">เพิ่มจังหวัด</a>`}</div>
         <div class="meta">เจ้าของ ${esc(c?c.name:'—')}${c&&c.phone?' · '+esc(c.phone):''}</div></div>
         <a class="btn ghost" href="#vehicle/${found.id}">แก้ข้อมูลรถ/เจ้าของ</a>
         <a class="btn" href="#new?plate=${encodeURIComponent(found.plate)}">รับรถคันนี้เข้า</a>
@@ -656,10 +687,12 @@ function viewNew(prefill){
     .map(c=>`<option value="${c.id}">${esc(c.name)}${c.phone?' · '+esc(c.phone):''}</option>`).join('');
   app().innerHTML = `
     <div class="head"><h1>รับรถเข้า</h1><p>ทะเบียนตัวอักษรและตัวเลขเดียวกัน = รถคันเดิมเสมอ ระบบผูกกับประวัติเดิมให้อัตโนมัติ ใส่จังหวัดหรือไม่ใส่ก็ได้</p></div>
+    ${provinceDatalist()}
     <form data-form="new-job" class="panel">
       <h2>รถ</h2>
       <div class="fields">
-        <label>เลขทะเบียน *<input name="plate" value="${esc(prefill||'')}" placeholder="1กก1234" required autocomplete="off"></label>
+        <label>เลขทะเบียน *<input name="plate" value="${esc(prefill||'')}" placeholder="กค5260" required autocomplete="off"></label>
+        <label>จังหวัด<input name="province" list="province-list" placeholder="พิมพ์ 2–3 ตัวแล้วเลือก" autocomplete="off"></label>
         <label>ยี่ห้อ<input name="brand" placeholder="Toyota"></label>
         <label>รุ่น<input name="model" placeholder="Yaris"></label>
         <label>สี<input name="color" placeholder="ขาว"></label>
@@ -753,6 +786,7 @@ function viewVehicles(){
     return `<tr>
       <td><a class="plate" href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a></td>
       <td>${esc(v.brand||'')} ${esc(v.model||'')} ${v.color?'สี'+esc(v.color):''}</td>
+      <td>${esc(provinceOf(v)||'—')}</td>
       <td>${c?`<a href="#customer/${c.id}">${esc(c.name)}</a>`:'—'}</td>
       <td class="num">${js.length}</td>
       <td>${js[0]?esc(fmtDate(js[0].dateIn)):'—'}</td>
@@ -761,7 +795,7 @@ function viewVehicles(){
   app().innerHTML = `
     <div class="head"><h1>รถทั้งหมด</h1><p>ทะเบียนคือกุญแจของทั้งระบบ แก้ทะเบียนแล้วประวัติเดิมยังตามรถคันเดิม</p></div>
     ${S.vehicles.length?`<div class="tablewrap"><table>
-      <thead><tr><th>ทะเบียน</th><th>รถ</th><th>เจ้าของ</th><th class="num">เข้าร้าน</th><th>ครั้งล่าสุด</th><th></th></tr></thead>
+      <thead><tr><th>ทะเบียน</th><th>รถ</th><th>จังหวัด</th><th>เจ้าของ</th><th class="num">เข้าร้าน</th><th>ครั้งล่าสุด</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>`:'<div class="panel"><p class="empty">ยังไม่มีรถในระบบ · <a href="#new">รับรถเข้าคันแรก</a></p></div>'}`;
 }
 
@@ -774,9 +808,11 @@ function viewVehicle(id){
     <div class="head"><h1><span class="plate">${esc(v.plate)}</span></h1><p>${esc(v.brand||'')} ${esc(v.model||'')}${sampleChip(v)}</p></div>
     <div class="panel">
       <h2>แก้ไขข้อมูลรถและเจ้าของ</h2>
+      ${provinceDatalist()}
       <form data-form="save-vehicle" data-id="${v.id}">
         <div class="fields">
           <label>เลขทะเบียน *<input name="plate" value="${esc(v.plate)}" required></label>
+          <label>จังหวัด<input name="province" value="${esc(provinceOf(v))}" list="province-list" placeholder="พิมพ์ 2–3 ตัวแล้วเลือก" autocomplete="off"></label>
           <label>ยี่ห้อ<input name="brand" value="${esc(v.brand||'')}"></label>
           <label>รุ่น<input name="model" value="${esc(v.model||'')}"></label>
           <label>สี<input name="color" value="${esc(v.color||'')}"></label>
@@ -966,13 +1002,16 @@ async function addCustomer(f, form){
   try{ await S.db.collection('customers').add({name,phone:(f.get('phone')||'').trim(),note:'',createdAt:new Date().toISOString()}); toast('เพิ่มลูกค้าแล้ว'); form.reset(); render(); }catch(e){ fail(e); }
 }
 async function saveVehicle(id, f){
-  const plate=(f.get('plate')||'').trim();
-  if(!plate) return toast('ต้องมีเลขทะเบียน',true);
+  const typed=(f.get('plate')||'').trim();
+  if(!typed) return toast('ต้องมีเลขทะเบียน',true);
+  const split=splitPlate(typed);
+  const plate=split.plate;
+  const province=canonProvince(f.get('province')||'') || split.province || '';
   const key=normPlate(plate);
   const core=plateCore(plate);
   const clash=S.vehicles.find(v=>v.id!==id&&(plateKeyOf(v)===key||coreOf(v)===core));
   if(clash) return toast('ทะเบียนนี้ซ้ำกับรถที่มีอยู่แล้ว ('+clash.plate+') ถ้าเป็นคันเดียวกันให้ใช้ประวัติเดิม',true);
-  try{ await S.db.doc('vehicles/'+id).update({plate,plateKey:key,plateCore:core,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId:f.get('customerId')||'',updatedAt:new Date().toISOString()}); toast('บันทึกข้อมูลรถแล้ว'); render(); }catch(e){ fail(e); }
+  try{ await S.db.doc('vehicles/'+id).update({plate,plateKey:key,plateCore:core,province,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId:f.get('customerId')||'',updatedAt:new Date().toISOString()}); toast('บันทึกข้อมูลรถแล้ว'); render(); }catch(e){ fail(e); }
 }
 async function delVehicle(id){
   if(jobsOfVehicle(id).length) return toast('ลบไม่ได้ รถคันนี้ยังมีใบงานอยู่',true);
@@ -989,8 +1028,11 @@ async function purgeSamples(){
   }catch(e){ fail(e); }
 }
 async function createJob(form, f){
-  const plate=(f.get('plate')||'').trim();
-  if(!plate) return toast('ต้องมีเลขทะเบียน',true);
+  const typedPlate=(f.get('plate')||'').trim();
+  if(!typedPlate) return toast('ต้องมีเลขทะเบียน',true);
+  const split=splitPlate(typedPlate);
+  const plate=split.plate;
+  const province=canonProvince(f.get('province')||'') || split.province || '';
   const key=normPlate(plate);
   const dateIn=f.get('dateIn'); if(!dateIn) return toast('ต้องมีวันรับรถ',true);
 
@@ -1013,11 +1055,16 @@ async function createJob(form, f){
   try{
     if(v){
       /* รถคันเดิมแน่นอน: ถ้าที่พิมพ์รอบนี้ละเอียดกว่า (มีจังหวัด) อัปเดตป้ายให้ครบ แต่ยังเป็น id เดิม ประวัติไม่แตก */
+      const patch={};
+      if(province && !provinceOf(v)) patch.province=province;
       if(plate.length > String(v.plate||'').length && plateCore(plate)===coreOf(v)){
-        await S.db.doc('vehicles/'+v.id).update({plate, plateKey:key, plateCore:plateCore(plate), updatedAt:new Date().toISOString()});
-      } else if(normPlate(v.plate)!==key){
-        toast('ทะเบียนนี้เคยเข้าร้านแล้ว ผูกกับประวัติเดิมของ '+v.plate);
+        patch.plate=plate; patch.plateKey=key; patch.plateCore=plateCore(plate);
       }
+      if(Object.keys(patch).length){
+        patch.updatedAt=new Date().toISOString();
+        await S.db.doc('vehicles/'+v.id).update(patch);
+      }
+      if(normPlate(v.plate)!==key) toast('ทะเบียนนี้เคยเข้าร้านแล้ว ผูกกับประวัติเดิมของ '+v.plate+(provinceOf(v)?' '+provinceOf(v):''));
     }
     if(!v){
       let customerId=f.get('customerId')||'';
@@ -1027,7 +1074,7 @@ async function createJob(form, f){
         const ref=await S.db.collection('customers').add({name,phone:(f.get('phone')||'').trim(),note:'',createdAt:new Date().toISOString()});
         customerId=ref.id;
       }
-      const vref=await S.db.collection('vehicles').add({plate,plateKey:key,plateCore:plateCore(plate),brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId,createdAt:new Date().toISOString()});
+      const vref=await S.db.collection('vehicles').add({plate,plateKey:key,plateCore:plateCore(plate),province,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId,createdAt:new Date().toISOString()});
       v={id:vref.id};
     }
     const jref=await S.db.collection('jobs').add({
