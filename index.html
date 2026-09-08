@@ -447,6 +447,38 @@ function findVehicles(queryRaw){
   if(scored.length) return {exact:null, matches:scored.map(x=>x.v), mode:'similar'};
   return {exact:null, matches:[], mode:'none'};
 }
+function findCustomers(query){
+  const q = String(query||'').trim();
+  const qd = digitsOf(q);
+  if(qd.length>=4){
+    const byPhone = S.customers.filter(c=>{ const p=digitsOf(c.phone); return p && p.indexOf(qd)>=0; });
+    if(byPhone.length) return {list:byPhone, mode:'phone'};
+  }
+  if(!qd && q.length>=2){
+    const byName = S.customers.filter(c=>String(c.name||'').indexOf(q)>=0);
+    if(byName.length) return {list:byName, mode:'name'};
+  }
+  return {list:[], mode:'none'};
+}
+function customerBlock(c){
+  const vs = vehiclesOfCustomer(c.id);
+  const js = vs.flatMap(v=>jobsOfVehicle(v.id));
+  const due = js.reduce((s,j)=>s+balanceOf(j),0);
+  return `<div class="panel" style="gap:10px">
+    <div class="jobrow">
+      <div class="grow"><h2>${esc(c.name)}</h2>
+        <div class="meta">${esc(c.phone||'ไม่มีเบอร์')} · รถ ${vs.length} คัน · เข้าร้าน ${js.length} ครั้ง${due>0?' · ค้างชำระ '+baht(due)+' บาท':''}</div></div>
+      <a class="btn ghost" href="#customer/${c.id}">ข้อมูลลูกค้า</a>
+    </div>
+    ${vs.length?vs.map(v=>`<div class="jobrow" style="padding-top:8px;border-top:1px solid var(--line)">
+        ${plateLink(v)}
+        <div class="grow">${esc(v.brand||'')} ${esc(v.model||'')}${v.color?' สี'+esc(v.color):''}${provinceOf(v)?' · '+esc(provinceOf(v)):''}
+          <div class="meta">เข้าร้าน ${jobsOfVehicle(v.id).length} ครั้ง${jobsOfVehicle(v.id)[0]?' · ล่าสุด '+esc(fmtDate(jobsOfVehicle(v.id)[0].dateIn)):''}</div></div>
+        <a class="btn ghost" href="#search/${encodeURIComponent(v.plate)}">ประวัติ</a>
+        <a class="btn" href="#new?plate=${encodeURIComponent(v.plate)}">รับรถคันนี้เข้า</a>
+      </div>`).join(''):'<p class="empty">ลูกค้าคนนี้ยังไม่มีรถในระบบ</p>'}
+  </div>`;
+}
 function vehicleLine(v){
   const c = customer(v.customerId);
   const js = jobsOfVehicle(v.id);
@@ -520,8 +552,16 @@ function jobCard(j,{showPlate=true,pay=false}={}){
 /* ---------- หน้า: ค้นทะเบียน ---------- */
 function viewSearch(q){
   const query = q||'';
-  const hit = query ? findVehicles(query) : {exact:null, matches:[], mode:'none'};
+  const phoneLike = digitsOf(query).length>=7;
+  let hit = query ? findVehicles(query) : {exact:null, matches:[], mode:'none'};
+  if(phoneLike && hit.mode==='similar') hit = {exact:null, matches:[], mode:'none'};
   const found = hit.exact;
+  const cust = query && !found ? findCustomers(query) : {list:[], mode:'none'};
+  const custBlock = cust.list.length ? `<div class="panel flat" style="gap:14px">
+      <div class="head"><h2>${cust.mode==='phone'?'เจอจากเบอร์โทร':'เจอจากชื่อลูกค้า'} ${cust.list.length} ราย</h2>
+        <p>กด "รับรถคันนี้เข้า" เพื่อเปิดใบงานใหม่ให้รถของลูกค้าคนเดิมได้ทันที</p></div>
+      ${cust.list.map(customerBlock).join('')}
+    </div>` : '';
   const open = openJobs();
   const MODE_NOTE = {
     partial: 'ไม่มีทะเบียนตรงตัว จึงแสดงคันที่มีเลขนี้อยู่ในทะเบียน',
@@ -536,9 +576,9 @@ function viewSearch(q){
       ${hit.matches.map(vehicleLine).join('')}
       <div class="actions"><a class="btn ghost" href="#new?plate=${encodeURIComponent(query.trim())}">ไม่ใช่สักคัน — รับรถคันใหม่เข้า</a></div>
     </div>`;
-  } else if(query && !found){
-    result = `<div class="panel"><h2>ไม่พบทะเบียน "${esc(query)}"</h2>
-      <p class="hint">ลองพิมพ์แค่ตัวเลข เช่น 5260 · หรือเปิดใบงานใหม่ให้รถคันนี้</p>
+  } else if(query && !found && !cust.list.length){
+    result = `<div class="panel"><h2>ไม่พบ "${esc(query)}"</h2>
+      <p class="hint">ค้นได้ทั้งเลขทะเบียน (พิมพ์บางส่วนก็ได้ เช่น 5260) เบอร์โทรลูกค้า หรือชื่อลูกค้า</p>
       <div class="actions"><a class="btn" href="#new?plate=${encodeURIComponent(query.trim())}">รับรถคันนี้เข้า</a></div></div>`;
   } else if(found){
     const c = customer(found.customerId); const list = jobsOfVehicle(found.id);
@@ -556,15 +596,16 @@ function viewSearch(q){
     </div>`;
   }
   app().innerHTML = `
-    <div class="head"><h1>ค้นทะเบียน</h1><p>พิมพ์เลขทะเบียนแล้วเห็นประวัติทุกครั้งที่รถคันนี้เข้าร้าน</p></div>
+    <div class="head"><h1>ค้นทะเบียน</h1><p>พิมพ์เลขทะเบียน เบอร์โทร หรือชื่อลูกค้า แล้วเห็นประวัติทุกครั้งที่รถเข้าร้าน</p></div>
     <div class="panel">
       <form data-form="search" class="searchbar">
-        <input name="plate" value="${esc(query)}" placeholder="1กก1234" autocomplete="off" inputmode="text" aria-label="เลขทะเบียนรถ">
+        <input name="plate" value="${esc(query)}" placeholder="ทะเบียน เบอร์โทร หรือชื่อลูกค้า" autocomplete="off" inputmode="text" aria-label="ค้นด้วยทะเบียน เบอร์โทร หรือชื่อลูกค้า">
         <button type="submit">ค้นหา</button>
       </form>
-      <p class="hint">พิมพ์แค่บางส่วนก็ได้ เช่น <b>5260</b> · เว้นวรรค ขีดกลาง และจังหวัดไม่มีผล · ${S.vehicles.slice(0,4).map(v=>`<a href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a>`).join(' · ')||'ยังไม่มีรถในระบบ'}</p>
+      <p class="hint">พิมพ์แค่บางส่วนก็ได้ เช่น <b>5260</b> หรือเบอร์โทร <b>0613562359</b> · เว้นวรรค ขีดกลาง และจังหวัดไม่มีผล · ${S.vehicles.slice(0,4).map(v=>`<a href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a>`).join(' · ')||'ยังไม่มีรถในระบบ'}</p>
     </div>
     ${result}
+    ${custBlock}
     <div class="tiles">
       <div class="tile"><b>${open.length}</b><small>คันค้างในร้าน</small></div>
       <div class="tile"><b>${S.vehicles.length}</b><small>รถในระบบ</small></div>

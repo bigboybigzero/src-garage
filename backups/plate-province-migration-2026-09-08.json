@@ -1,0 +1,17 @@
+{
+  "note": "บันทึกก่อนย้ายจังหวัดออกจากช่องทะเบียน 8 ก.ย. 2026 — ใช้ย้อนกลับได้ถ้าจำเป็น",
+  "vehicles": [
+    {"id":"fefad6b8-7c1e-41d5-9e05-d427af43b69c","plateBefore":"ก-3187 พิษณุโลก","plateAfter":"ก-3187","province":"พิษณุโลก"},
+    {"id":"d779a747-66b1-4e17-858f-e01189c030bc","plateBefore":"7ขฒ7467 กทม","plateAfter":"7ขฒ7467","province":"กรุงเทพมหานคร"},
+    {"id":"7db2d8d0-7d79-4d55-9421-215a73fecbf8","plateBefore":"กท5260 พิจิตร","plateAfter":"กท5260","province":"พิจิตร"},
+    {"id":"33437399-cab1-48ca-ad47-39019b180080","plateBefore":"กท9229 พิจิตร","plateAfter":"กท9229","province":"พิจิตร"},
+    {"id":"619b93b2-487c-4af4-9a48-f99000bc9826","plateBefore":"กบ4121 พิษณุโลก","plateAfter":"กบ4121","province":"พิษณุโลก"},
+    {"id":"08abad10-8016-4911-850f-f4d5b732ad1b","plateBefore":"กร5947 พิษณุโลก","plateAfter":"กร5947","province":"พิษณุโลก"},
+    {"id":"0765b908-32a4-4178-b388-e2eab26d6689","plateBefore":"กม2911 นครราชสีมา","plateAfter":"กม2911","province":"นครราชสีมา"},
+    {"id":"c97ca666-ad3a-4263-8b17-faed6aadb65a","plateBefore":"8กพ8452 กทม","plateAfter":"8กพ8452","province":"กรุงเทพมหานคร"},
+    {"id":"45fa44a5-ebe5-4b35-8df2-9fd4aa905abf","plateBefore":"กพ3585 พิษณุโลก","plateAfter":"กพ3585","province":"พิษณุโลก"},
+    {"id":"5697b1df-cea1-4a50-9a8a-e32c455e398f","plateBefore":"กค1223 อุตรดิตถ์","plateAfter":"กค1223","province":"อุตรดิตถ์"},
+    {"id":"0ea071f7-8bd4-4fd9-9a01-464cbc7e6c2c","plateBefore":"กอ6630 พิษณุโลก","plateAfter":"กอ6630","province":"พิษณุโลก"}
+  ],
+  "unchanged": ["กค598", "7ขผ2731", "1"]
+}
