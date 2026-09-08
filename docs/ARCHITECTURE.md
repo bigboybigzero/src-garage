@@ -9,6 +9,7 @@
 | Master | `vehicles/<id>` | `plate` str ✔ (ตามที่พิมพ์) · `plateKey` str ✔ (unique) · `plateCore` str ✔ (ตัวอักษร+ตัวเลข ตัดจังหวัด — ตัวชี้ขาดว่าเป็นคันเดียวกัน) · `province` str (เลือกจากรายชื่อ 77 จังหวัด เก็บชื่อเต็มเสมอ เช่น กทม → กรุงเทพมหานคร) · `brand` · `model` · `color` str · `customerId` str ✔ → customers.id · `createdAt`/`updatedAt` · `sample` | `plateKey` = `plate` ตัดช่องว่าง/ขีดกลาง + ตัวพิมพ์ใหญ่ ใช้เป็นกุญแจค้นและกันทะเบียนซ้ำ · แก้ทะเบียนได้ ประวัติตาม `id` ไม่หลุด · ย้ายเจ้าของ = แก้ `customerId` ใบงานยังอยู่กับรถ |
 | Master | `services/<id>` | `name` str ✔ (ไม่ซ้ำ) · `priceSatang` int ✔ ≥ 0 (0 = ยังไม่ตั้งราคา) · `createdAt`/`updatedAt` | ทะเบียนตัวเลือกรายการงานที่ร้านแก้เอง · ใช้ **คัดลอก** ชื่อ+ราคาไปใส่ใบงานตอนเลือก แล้วไม่ผูกกันอีก · แก้/ลบไม่กระทบใบงานเก่า · ไม่ติด `sample` จึงไม่ถูกลบด้วยปุ่มล้างข้อมูลตัวอย่าง |
 | Transaction | `jobs/<id>` | `vehicleId` str ✔ → vehicles.id · `dateIn` YYYY-MM-DD ✔ · `datePromised` YYYY-MM-DD (ว่างได้) · `status` enum ✔ · `techName` str · `note` str · `receivedSatang` int ✔ ≥ 0 · `depositSatang` int (เขียนคู่ไว้เพื่อความเข้ากันได้) · `lastPaymentAt` ISO · `items` array ✔ · `createdAt`/`updatedAt` · `sample` | 1 ใบ = 1 ครั้งที่รถเข้าร้าน · `status` ∈ received \| in_progress \| ready \| delivered เดินหน้าทางเดียว · `0 ≤ receivedSatang ≤ totalSatang` |
+| Log | `deletedJobs/<id>` | `jobId` · `job` (สำเนาใบงานทั้งใบ) · `plate` · `province` · `vehicleId` · `car` · `customerName` · `customerPhone` · `status` · `dateIn` · `itemsText` · `totalSatang` · `receivedSatang` · `balanceSatang` · `reason` · `deletedAt` · `deletedBy` | บันทึกทุกครั้งที่ลบใบงาน ใช้ตรวจย้อนหลังและกู้คืน · id เดียวกับใบงานเดิม กู้คืนแล้วได้ id เดิมกลับมา |
 | ฝังในใบงาน | `jobs/<id>.items[]` | `name` str ✔ · `priceSatang` int ✔ ≥ 0 | **ไม่ใช่ collection แยก** เก็บเป็น array ในเอกสาร job (ประหยัดโควตาเอกสาร) · ไม่มี `id` ไม่มี `serviceId` อ้างถึงด้วยลำดับ index ในใบนั้น |
 
 เจ้าของข้อมูล: ธุรการหน้าร้านเป็นคนเขียนหลัก · ช่างเก็บเป็นข้อความใน `techName` ไม่ใช่ทะเบียนช่าง (ถ้าจะทำคิวช่างต้องเพิ่ม master ใหม่ ดู BACKLOG.md)
@@ -37,7 +38,7 @@
 - ทุกหน้าอ่านจาก `onSnapshot` ของ 4 collections พร้อมกัน หน้าจะยังไม่วาดจนกว่าจะได้ครบทั้ง 4
 
 ## กติกาแก้/ลบ
-- ลบ customer ที่ยังมี vehicle ไม่ได้ · ลบ vehicle ที่ยังมี job ไม่ได้ · ลบ job สถานะ delivered ไม่ได้
+- ลบ customer ที่ยังมี vehicle ไม่ได้ · ลบ vehicle ที่ยังมี job ไม่ได้ · **ลบ job ได้ทุกสถานะ** แต่ต้องเขียน `deletedJobs` ก่อนเสมอ แล้วจึงลบใบงาน
 - ลบ item ได้เฉพาะใบที่ยังไม่ delivered · ลบแล้วถ้า `receivedOf` จะเกิน total ใหม่ ต้องห้ามลบและบอกให้ลดยอดรับเงินก่อน
 - `status` เดินหน้าอย่างเดียว กดซ้ำสถานะเดิม = ไม่เกิดผล (idempotent)
 - รับเงินเพิ่ม = บวกเข้า `receivedSatang` (ห้าม 0 ห้ามเกินยอดค้าง) · แก้ยอดสะสมโดยตรงได้ในใบงานเมื่อคีย์ผิด

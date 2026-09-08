@@ -121,7 +121,8 @@ if (String(CFG.url||'').startsWith('PASTE')) {
         const pull = async ()=>{
           const { data, error } = await sb.from(table).select('id,data');
           if (!alive) return;
-          if (error) { onError && onError(toErr(error)); return; }
+          if (!error) { const g = await sb.auth.getSession(); window.__srcUser = g.data.session && g.data.session.user && g.data.session.user.email; }
+    if (error) { onError && onError(toErr(error)); return; }
           next(asSnap(data||[]));
         };
         pull();
@@ -151,7 +152,7 @@ if (String(CFG.url||'').startsWith('PASTE')) {
   }
 
   const { data: sess } = await sb.auth.getSession();
-  if (sess && sess.session) openApp();
+  if (sess && sess.session) { window.__srcUser = sess.session.user && sess.session.user.email; openApp(); }
 
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();

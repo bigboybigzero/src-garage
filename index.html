@@ -121,7 +121,8 @@ if (String(CFG.url||'').startsWith('PASTE')) {
         const pull = async ()=>{
           const { data, error } = await sb.from(table).select('id,data');
           if (!alive) return;
-          if (error) { onError && onError(toErr(error)); return; }
+          if (!error) { const g = await sb.auth.getSession(); window.__srcUser = g.data.session && g.data.session.user && g.data.session.user.email; }
+    if (error) { onError && onError(toErr(error)); return; }
           next(asSnap(data||[]));
         };
         pull();
@@ -151,7 +152,7 @@ if (String(CFG.url||'').startsWith('PASTE')) {
   }
 
   const { data: sess } = await sb.auth.getSession();
-  if (sess && sess.session) openApp();
+  if (sess && sess.session) { window.__srcUser = sess.session.user && sess.session.user.email; openApp(); }
 
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
@@ -309,6 +310,7 @@ textarea{min-height:64px;resize:vertical}
     <a href="#customers">ข้อมูลลูกค้า</a>
     <a href="#vehicles">รถ</a>
     <a href="#services">รายการงาน</a>
+    <a href="#trash">รายการที่ลบ</a>
     <a href="#backup">สำรองข้อมูล</a>
   </nav>
 </header>
@@ -321,7 +323,7 @@ const NEXT = { received:'in_progress', in_progress:'ready', ready:'delivered', d
 const NEXT_LABEL = { received:'เริ่มลงมือทำ', in_progress:'งานเสร็จ รอลูกค้ามารับ', ready:'ลูกค้ามารับรถแล้ว' };
 const OPEN = ['received','in_progress'];
 
-const S = { db:null, downloads:null, mode:'loading', customers:[], vehicles:[], jobs:[], services:[], seen:{customers:false,vehicles:false,jobs:false,services:false}, formRoute:false, stale:false };
+const S = { db:null, downloads:null, mode:'loading', customers:[], vehicles:[], jobs:[], services:[], deletedJobs:[], seen:{customers:false,vehicles:false,jobs:false,services:false,deletedJobs:false}, formRoute:false, stale:false };
 
 const $ = (sel,root=document)=>root.querySelector(sel);
 const app = ()=>document.getElementById('app');
@@ -678,7 +680,7 @@ function viewJob(id){
       </div>
       <div class="actions">
         ${next?`<button data-act="advance" data-id="${j.id}" data-to="${next}">${NEXT_LABEL[j.status]}</button>`:'<button disabled>ปิดงานแล้ว</button>'}
-        ${j.status!=='delivered'?`<button class="danger" data-act="del-job" data-id="${j.id}">ลบใบงานนี้</button>`:''}
+        <button class="danger" data-act="del-job" data-id="${j.id}">ลบใบงานนี้</button>
       </div>
     </div>
 
@@ -918,6 +920,33 @@ async function delService(id){
   try{ await S.db.doc('services/'+id).delete(); toast('ลบรายการแล้ว'); }catch(e){ fail(e); }
 }
 
+/* ---------- หน้า: รายการที่ลบ ---------- */
+function viewTrash(){
+  const list = S.deletedJobs.slice().sort((a,b)=>String(b.deletedAt||'').localeCompare(String(a.deletedAt||'')));
+  const rows = list.map(r=>`<div class="panel" style="gap:8px">
+      <div class="jobrow">
+        <span class="plate">${esc(r.plate||'—')}</span>
+        <div class="grow"><b>${esc(r.car||'')}</b>${r.province?' · '+esc(r.province):''}
+          <div class="meta">ลูกค้า ${esc(r.customerName||'—')}${r.customerPhone?' · '+esc(r.customerPhone):''}</div></div>
+        <span class="chip">${STATUS[r.status]||esc(r.status||'')}</span>
+      </div>
+      <div class="meta">วันรับรถ ${esc(fmtDate(r.dateIn))} · รายการงาน: ${esc(r.itemsText||'—')}</div>
+      <div class="meta">ยอดรวม <b class="money">${baht(r.totalSatang)}</b> · รับแล้ว <b class="money">${baht(r.receivedSatang)}</b> · ค้าง <b class="money">${baht(r.balanceSatang)}</b></div>
+      <div class="meta">ลบเมื่อ ${esc(fmtDateTime(r.deletedAt))} โดย ${esc(r.deletedBy||'—')}${r.reason?' · เหตุผล: '+esc(r.reason):''}</div>
+      <div class="actions">
+        <button data-act="restore-job" data-id="${r.id}">กู้คืนใบงานนี้</button>
+        <button class="danger" data-act="purge-job" data-id="${r.id}">ลบบันทึกถาวร</button>
+      </div>
+    </div>`).join('');
+  app().innerHTML = `
+    <div class="head"><h1>รายการที่ลบ</h1><p>ใบงานที่ถูกลบจะเก็บไว้ที่นี่พร้อมข้อมูลครบ กู้คืนได้ถ้าลบผิด</p></div>
+    <div class="tiles">
+      <div class="tile"><b>${list.length}</b><small>ใบงานที่ลบไว้</small></div>
+      <div class="tile"><b class="money">${baht(list.reduce((s,r)=>s+Number(r.totalSatang||0),0))}</b><small>มูลค่ารวมของใบที่ลบ (บาท)</small></div>
+    </div>
+    ${list.length?rows:'<div class="panel"><p class="empty">ยังไม่มีใบงานที่ถูกลบ</p></div>'}`;
+}
+
 /* ---------- หน้า: สำรองข้อมูล ---------- */
 function viewBackup(){
   const counts=`ลูกค้า ${S.customers.length} · รถ ${S.vehicles.length} · ใบงาน ${S.jobs.length} · รายการงาน ${S.services.length}`;
@@ -940,7 +969,7 @@ function viewBackup(){
 }
 async function exportBackup(){
   if(!S.downloads) return toast('มุมมองนี้ดาวน์โหลดไฟล์ไม่ได้',true);
-  const payload={app:'carstyle',version:1,exportedAt:new Date().toISOString(),customers:S.customers,vehicles:S.vehicles,jobs:S.jobs,services:S.services};
+  const payload={app:'carstyle',version:1,exportedAt:new Date().toISOString(),customers:S.customers,vehicles:S.vehicles,jobs:S.jobs,services:S.services,deletedJobs:S.deletedJobs};
   try{
     await S.downloads.save({filename:'src-garage-backup-'+today()+'.json',data:JSON.stringify(payload,null,2)});
     toast('ดาวน์โหลดไฟล์สำรองแล้ว');
@@ -955,7 +984,7 @@ async function importBackup(){
   if(!file) return toast('เลือกไฟล์สำรองก่อน',true);
   let data;
   try{ data=JSON.parse(await file.text()); }catch(e){ return toast('อ่านไฟล์ไม่ได้ ไฟล์นี้ไม่ใช่ JSON',true); }
-  const groups=[['customers',data.customers],['vehicles',data.vehicles],['jobs',data.jobs],['services',data.services||[]]];
+  const groups=[['customers',data.customers],['vehicles',data.vehicles],['jobs',data.jobs],['services',data.services||[]],['deletedJobs',data.deletedJobs||[]]];
   if(groups.some(g=>!Array.isArray(g[1]))) return toast('ไฟล์นี้ไม่ใช่ไฟล์สำรองของระบบนี้',true);
   const total=groups.reduce((n,g)=>n+g[1].length,0);
   if(!confirm('นำเข้า '+total+' รายการ (ลูกค้า '+data.customers.length+' · รถ '+data.vehicles.length+' · ใบงาน '+data.jobs.length+') ?\nเอกสารที่ id ตรงกันจะถูกเขียนทับ')) return;
@@ -1021,11 +1050,55 @@ async function receivePayment(id, amountBaht){
     toast(now>=totalOf(j)?'รับเงินครบแล้ว':'รับเงิน '+baht(amount)+' บาท · เหลือค้าง '+baht(totalOf(j)-now));
   }catch(e){ fail(e); }
 }
+const currentUser = ()=> (typeof window!=='undefined' && window.__srcUser) ? window.__srcUser : 'ทีมงาน';
 async function delJob(id){
   const j = job(id); if(!j) return;
-  if(j.status==='delivered') return toast('ใบงานที่ส่งมอบแล้วลบไม่ได้',true);
-  if(!confirm('ลบใบงานนี้ทั้งใบ?')) return;
-  try{ await S.db.doc('jobs/'+id).delete(); toast('ลบใบงานแล้ว'); location.hash='#open'; }catch(e){ fail(e); }
+  const v = vehicle(j.vehicleId); const c = ownerOfJob(j);
+  const total = totalOf(j), received = receivedOf(j);
+  const itemsText = itemsOf(j).map(i=>i.name+' '+baht(i.priceSatang)).join(' · ') || 'ไม่มีรายการงาน';
+  const summary = 'ลบใบงานนี้?\n\n'
+    + 'ทะเบียน ' + (v?v.plate:'—') + (v&&provinceOf(v)?' '+provinceOf(v):'') + '\n'
+    + 'ลูกค้า ' + (c?c.name:'—') + '\n'
+    + 'วันรับรถ ' + fmtDate(j.dateIn) + ' · สถานะ ' + STATUS[j.status] + '\n'
+    + 'รายการงาน: ' + itemsText + '\n'
+    + 'ยอดรวม ' + baht(total) + ' · รับแล้ว ' + baht(received) + ' · ค้าง ' + baht(total-received) + '\n\n'
+    + 'ใบงานจะย้ายไปหน้า "รายการที่ลบ" กู้คืนได้ภายหลัง';
+  if(!confirm(summary)) return;
+  let reason = '';
+  try{ reason = window.prompt('เหตุผลที่ลบ (เว้นว่างได้)','คีย์ผิด') || ''; }catch(e){ reason=''; }
+  try{
+    await S.db.doc('deletedJobs/'+id).set({
+      jobId:id, job:Object.assign({}, j, {id:undefined}),
+      plate: v?v.plate:'', province: v?provinceOf(v):'', vehicleId: j.vehicleId,
+      car: v?((v.brand||'')+' '+(v.model||'')).trim():'',
+      customerName: c?c.name:'', customerPhone: c?(c.phone||''):'',
+      status: j.status, dateIn: j.dateIn||'', itemsText,
+      totalSatang: total, receivedSatang: received, balanceSatang: total-received,
+      reason, deletedAt: new Date().toISOString(), deletedBy: currentUser()
+    });
+    await S.db.doc('jobs/'+id).delete();
+    toast('ลบใบงานแล้ว ดูย้อนหลังได้ที่หน้ารายการที่ลบ');
+    location.hash='#trash';
+  }catch(e){ fail(e); }
+}
+async function restoreJob(id){
+  const rec = S.deletedJobs.find(x=>x.id===id); if(!rec) return;
+  if(!vehicle(rec.vehicleId)) return toast('กู้คืนไม่ได้ เพราะรถของใบงานนี้ถูกลบไปแล้ว',true);
+  if(!confirm('กู้คืนใบงานของ '+(rec.plate||'—')+' วันที่ '+fmtDate(rec.dateIn)+' ?')) return;
+  try{
+    const body = Object.assign({}, rec.job||{});
+    delete body.id;
+    body.restoredAt = new Date().toISOString();
+    await S.db.doc('jobs/'+(rec.jobId||id)).set(body);
+    await S.db.doc('deletedJobs/'+id).delete();
+    toast('กู้คืนใบงานแล้ว');
+    location.hash='#job/'+(rec.jobId||id);
+  }catch(e){ fail(e); }
+}
+async function purgeDeleted(id){
+  const rec = S.deletedJobs.find(x=>x.id===id); if(!rec) return;
+  if(!confirm('ลบบันทึกนี้ออกจากประวัติการลบถาวร? หลังจากนี้กู้คืนไม่ได้อีก')) return;
+  try{ await S.db.doc('deletedJobs/'+id).delete(); toast('ลบบันทึกถาวรแล้ว'); }catch(e){ fail(e); }
 }
 async function saveCustomer(id, f){
   const name=(f.get('name')||'').trim();
@@ -1161,6 +1234,8 @@ document.addEventListener('click', (e)=>{
   else if(act==='del-customer') delCustomer(id);
   else if(act==='del-vehicle') delVehicle(id);
   else if(act==='purge-samples') purgeSamples();
+  else if(act==='restore-job') restoreJob(id);
+  else if(act==='purge-job') purgeDeleted(id);
   else if(act==='export') exportBackup();
   else if(act==='import') importBackup();
   else if(act==='del-service') delService(id);
@@ -1209,13 +1284,14 @@ function render(){
   else if(page==='vehicle') viewVehicle(arg);
   else if(page==='backup') viewBackup();
   else if(page==='services') viewServices();
+  else if(page==='trash') viewTrash();
   else notFound('ไม่พบหน้านี้');
   window.scrollTo(0,0);
 }
 window.addEventListener('hashchange',()=>{ S.stale=false; render(); });
 
 function onData(){
-  if(!S.seen.customers||!S.seen.vehicles||!S.seen.jobs||!S.seen.services) return;
+  if(!S.seen.customers||!S.seen.vehicles||!S.seen.jobs||!S.seen.services||!S.seen.deletedJobs) return;
   S.mode='live';
   if(S.formRoute){ S.stale=true; return; }
   render();
@@ -1231,7 +1307,7 @@ function watch(name){
   if(!db){ S.mode='offline'; render(); return; }
   S.db = db;
   claude.use('downloads').then(d=>{ S.downloads=d; if(location.hash.indexOf('backup')>=0) render(); }).catch(()=>{});
-  ['customers','vehicles','jobs','services'].forEach(watch);
+  ['customers','vehicles','jobs','services','deletedJobs'].forEach(watch);
   setTimeout(()=>{ if(S.mode==='loading'){ S.mode='live'; render(); } }, 4000);
 })();
 render();
