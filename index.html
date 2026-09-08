@@ -429,11 +429,11 @@ function findVehicles(queryRaw){
   const byCore = findByCore(query);
   if(byCore) return {exact:byCore, matches:[byCore], mode:'core'};
 
-  let hits = rows.filter(r=>r.key.indexOf(q)>=0 || q.indexOf(r.key)>=0).map(r=>r.v);
+  let hits = rows.filter(r=>(q.length>=2 && r.key.indexOf(q)>=0) || (r.key.length>=3 && q.indexOf(r.key)>=0)).map(r=>r.v);
   if(hits.length) return {exact:hits.length===1?hits[0]:null, matches:hits, mode:'partial'};
 
   const qd = digitsOf(q);
-  if(qd.length>=3){
+  if(qd.length>=3 && qd.length<=5){
     hits = rows.filter(r=>{ const d=digitsOf(r.key); return d && (d.indexOf(qd)>=0 || qd.indexOf(d)>=0); }).map(r=>r.v);
     if(hits.length) return {exact:hits.length===1?hits[0]:null, matches:hits, mode:'digits'};
   }
@@ -552,9 +552,9 @@ function jobCard(j,{showPlate=true,pay=false}={}){
 /* ---------- หน้า: ค้นทะเบียน ---------- */
 function viewSearch(q){
   const query = q||'';
-  const phoneLike = digitsOf(query).length>=7;
-  let hit = query ? findVehicles(query) : {exact:null, matches:[], mode:'none'};
-  if(phoneLike && hit.mode==='similar') hit = {exact:null, matches:[], mode:'none'};
+  const hasThai = /[\u0E01-\u0E2E]/.test(String(query));
+  const phoneLike = digitsOf(query).length>=7 && !hasThai;
+  let hit = (query && !phoneLike) ? findVehicles(query) : {exact:null, matches:[], mode:'none'};
   const found = hit.exact;
   const cust = query && !found ? findCustomers(query) : {list:[], mode:'none'};
   const custBlock = cust.list.length ? `<div class="panel flat" style="gap:14px">
