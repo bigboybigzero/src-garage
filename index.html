@@ -310,6 +310,7 @@ textarea{min-height:64px;resize:vertical}
     <a href="#customers">ข้อมูลลูกค้า</a>
     <a href="#vehicles">รถ</a>
     <a href="#services">รายการงาน</a>
+    <a href="#sales">ยอดขาย</a>
     <a href="#trash">รายการที่ลบ</a>
     <a href="#backup">สำรองข้อมูล</a>
   </nav>
@@ -955,6 +956,106 @@ async function delService(id){
   try{ await S.db.doc('services/'+id).delete(); toast('ลบรายการแล้ว'); }catch(e){ fail(e); }
 }
 
+/* ---------- หน้า: ยอดขายรายเดือน ---------- */
+const TH_MONTH_SHORT = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+const monthKey = (iso)=>String(iso||'').slice(0,7);
+const monthLabel = (mk)=>{ const p=String(mk||'').split('-'); return p.length===2 ? TH_MONTHS[Number(p[1])-1]+' '+p[0] : mk; };
+const monthShort = (mk)=>{ const p=String(mk||'').split('-'); return p.length===2 ? TH_MONTH_SHORT[Number(p[1])-1]+' '+p[0] : mk; };
+function monthTotals(mk){
+  const list = S.jobs.filter(j=>monthKey(j.dateIn)===mk);
+  const total = list.reduce((s,j)=>s+totalOf(j),0);
+  const received = list.reduce((s,j)=>s+receivedOf(j),0);
+  return {list, total, received, balance: total-received};
+}
+function shiftMonth(mk, delta){
+  const p=String(mk).split('-'); const d=new Date(Number(p[0]), Number(p[1])-1+delta, 1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function viewSales(mkArg){
+  const mk = /^\d{4}-\d{2}$/.test(String(mkArg||'')) ? mkArg : today().slice(0,7);
+  const {list, total, received, balance} = monthTotals(mk);
+  const rows = list.slice().sort((a,b)=>String(a.dateIn).localeCompare(String(b.dateIn))).map(j=>{
+    const v=vehicle(j.vehicleId), c=ownerOfJob(j);
+    return `<tr>
+      <td>${esc(fmtDate(j.dateIn))}</td>
+      <td>${v?esc(v.plate):'—'}</td>
+      <td>${v?esc(((v.brand||'')+' '+(v.model||'')).trim()):'—'}</td>
+      <td>${esc(c?c.name:'—')}</td>
+      <td>${esc(itemsOf(j).map(i=>i.name).join(' · ')||'—')}</td>
+      <td class="num money">${baht(totalOf(j))}</td>
+      <td class="num money">${baht(receivedOf(j))}</td>
+      <td class="num money">${baht(balanceOf(j))}</td>
+      <td><span class="chip ${j.status}">${STATUS[j.status]}</span></td>
+    </tr>`;}).join('');
+
+  const byItem = {};
+  list.forEach(j=>itemsOf(j).forEach(i=>{ byItem[i.name]=(byItem[i.name]||0)+Number(i.priceSatang||0); }));
+  const topItems = Object.entries(byItem).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  const months = [];
+  for(let i=5;i>=0;i--){ const m=shiftMonth(mk,-i); months.push(Object.assign({mk:m}, monthTotals(m))); }
+
+  app().innerHTML = `
+    <div class="head"><h1>ยอดขาย ${esc(monthLabel(mk))}</h1><p>นับตามวันรับรถของแต่ละใบงาน · เงินที่รับแล้วนับจากยอดรับเงินสะสมในใบงานนั้น</p></div>
+    <div class="panel">
+      <form data-form="pick-month" class="searchbar">
+        <button type="button" class="ghost" data-act="month-prev" data-id="${mk}">← เดือนก่อน</button>
+        <input name="month" type="month" value="${esc(mk)}" style="max-width:200px">
+        <button type="button" class="ghost" data-act="month-next" data-id="${mk}">เดือนถัดไป →</button>
+        <button type="button" class="ghost" data-act="month-now">เดือนนี้</button>
+        <button type="button" data-act="export-month" data-id="${mk}">ดาวน์โหลด CSV</button>
+      </form>
+    </div>
+    <div class="tiles">
+      <div class="tile"><b class="money">${baht(total)}</b><small>ยอดขายรวม (บาท)</small></div>
+      <div class="tile"><b class="money">${baht(received)}</b><small>ชำระแล้ว (บาท)</small></div>
+      <div class="tile"><b class="money">${baht(balance)}</b><small>ค้างชำระ (บาท)</small></div>
+      <div class="tile"><b>${list.length}</b><small>ใบงานในเดือนนี้</small></div>
+    </div>
+    ${list.length?`<div class="tablewrap"><table>
+      <thead><tr><th>วันรับรถ</th><th>ทะเบียน</th><th>รถ</th><th>ลูกค้า</th><th>รายการงาน</th><th class="num">ยอดรวม</th><th class="num">ชำระแล้ว</th><th class="num">ค้าง</th><th>สถานะ</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="5">รวมทั้งเดือน</td><td class="num money">${baht(total)}</td><td class="num money">${baht(received)}</td><td class="num money">${baht(balance)}</td><td></td></tr></tfoot>
+    </table></div>`:'<div class="panel"><p class="empty">เดือนนี้ยังไม่มีใบงาน</p></div>'}
+    ${topItems.length?`<div class="panel">
+      <h2>งานที่ทำเงินมากที่สุดในเดือนนี้</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>รายการงาน</th><th class="num">ยอดรวม (บาท)</th></tr></thead>
+        <tbody>${topItems.map(([n,v])=>`<tr><td>${esc(n)}</td><td class="num money">${baht(v)}</td></tr>`).join('')}</tbody>
+      </table></div></div>`:''}
+    <div class="panel">
+      <h2>ย้อนหลัง 6 เดือน</h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>เดือน</th><th class="num">ยอดขายรวม</th><th class="num">ชำระแล้ว</th><th class="num">ค้างชำระ</th><th class="num">ใบงาน</th></tr></thead>
+        <tbody>${months.map(m=>`<tr${m.mk===mk?' style="font-weight:600"':''}>
+          <td><a href="#sales/${m.mk}">${esc(monthShort(m.mk))}</a></td>
+          <td class="num money">${baht(m.total)}</td>
+          <td class="num money">${baht(m.received)}</td>
+          <td class="num money">${baht(m.balance)}</td>
+          <td class="num">${m.list.length}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <p class="hint">ยอดค้างชำระคือเงินที่ยังเก็บไม่ครบของใบงานในเดือนนั้น ถ้าเก็บครบภายหลังตัวเลขนี้จะลดลงเอง</p>
+    </div>`;
+}
+async function exportMonthCsv(mk){
+  const {list, total, received, balance} = monthTotals(mk);
+  if(!list.length) return toast('เดือนนี้ยังไม่มีใบงาน',true);
+  const q = (t)=>'"'+String(t==null?'':t).replace(/"/g,'""')+'"';
+  const lines = [['วันรับรถ','ทะเบียน','จังหวัด','รถ','ลูกค้า','เบอร์โทร','รายการงาน','ยอดรวม','ชำระแล้ว','ค้างชำระ','สถานะ'].map(q).join(',')];
+  list.slice().sort((a,b)=>String(a.dateIn).localeCompare(String(b.dateIn))).forEach(j=>{
+    const v=vehicle(j.vehicleId), c=ownerOfJob(j);
+    lines.push([j.dateIn||'', v?v.plate:'', v?provinceOf(v):'', v?((v.brand||'')+' '+(v.model||'')).trim():'',
+      c?c.name:'', c?(c.phone||''):'', itemsOf(j).map(i=>i.name+' '+(i.priceSatang/100)).join(' | '),
+      (totalOf(j)/100).toFixed(2), (receivedOf(j)/100).toFixed(2), (balanceOf(j)/100).toFixed(2), STATUS[j.status]||''].map(q).join(','));
+  });
+  lines.push(['รวมทั้งเดือน','','','','','','',(total/100).toFixed(2),(received/100).toFixed(2),(balance/100).toFixed(2),''].map(q).join(','));
+  if(!S.downloads) return toast('มุมมองนี้ดาวน์โหลดไฟล์ไม่ได้',true);
+  try{
+    await S.downloads.save({filename:'src-garage-ยอดขาย-'+mk+'.csv', data:'\ufeff'+lines.join('\n')});
+    toast('ดาวน์โหลดไฟล์แล้ว');
+  }catch(e){ if(!(e&&e.code==='declined')) toast('ดาวน์โหลดไม่สำเร็จ',true); }
+}
+
 /* ---------- หน้า: รายการที่ลบ ---------- */
 function viewTrash(){
   const list = S.deletedJobs.slice().sort((a,b)=>String(b.deletedAt||'').localeCompare(String(a.deletedAt||'')));
@@ -1242,7 +1343,7 @@ document.addEventListener('submit', (e)=>{
   e.preventDefault();
   const kind=form.dataset.form, id=form.dataset.id, f=new FormData(form);
   if(kind==='search'){ location.hash='#search/'+encodeURIComponent(String(f.get('plate')||'').trim()); return; }
-  if(kind==='filter-open'){ return; }
+  if(kind==='filter-open'||kind==='pick-month'){ return; }
   if(!S.db) return toast('ยังเชื่อมฐานข้อมูลไม่ได้ จึงบันทึกไม่ได้',true);
   if(kind==='add-item'){ addItem(id,resolveItemName(f.get('itemService'),f.get('itemName')),f.get('itemPrice')); form.reset(); form.querySelector('input[name=itemName]').hidden=true; }
   else if(kind==='save-job') saveJob(id,f);
@@ -1258,6 +1359,10 @@ document.addEventListener('click', (e)=>{
   const b=e.target.closest('[data-act]'); if(!b) return;
   const act=b.dataset.act, id=b.dataset.id;
   if(act==='clear-open-filter'){ S.openFilter=''; render(); return; }
+  if(act==='month-prev'){ location.hash='#sales/'+shiftMonth(b.dataset.id,-1); return; }
+  if(act==='month-next'){ location.hash='#sales/'+shiftMonth(b.dataset.id,1); return; }
+  if(act==='month-now'){ location.hash='#sales/'+today().slice(0,7); return; }
+  if(act==='export-month'){ exportMonthCsv(b.dataset.id); return; }
   if(act==='add-item-row'){
     const box=document.getElementById('items');
     const wrap=document.createElement('div'); wrap.innerHTML=itemRowHTML(true);
@@ -1295,6 +1400,9 @@ document.addEventListener('change',(e)=>{
 document.addEventListener('input',(e)=>{
   if(e.target && e.target.id==='open-filter'){ S.openFilter = e.target.value; renderOpenList(); }
 });
+document.addEventListener('change',(e)=>{
+  if(e.target && e.target.name==='month' && e.target.type==='month' && e.target.value){ location.hash='#sales/'+e.target.value; }
+});
 
 /* ---------- router ---------- */
 const FORM_ROUTES=['new','backup'];
@@ -1326,6 +1434,7 @@ function render(){
   else if(page==='backup') viewBackup();
   else if(page==='services') viewServices();
   else if(page==='trash') viewTrash();
+  else if(page==='sales') viewSales(arg);
   else notFound('ไม่พบหน้านี้');
   window.scrollTo(0,0);
 }
