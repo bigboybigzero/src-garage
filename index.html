@@ -470,7 +470,7 @@ function customerBlock(c){
   return `<div class="panel" style="gap:10px">
     <div class="jobrow">
       <div class="grow"><h2>${esc(c.name)}</h2>
-        <div class="meta">${esc(c.phone||'ไม่มีเบอร์')} · รถ ${vs.length} คัน · เข้าร้าน ${js.length} ครั้ง${due>0?' · ค้างชำระ '+baht(due)+' บาท':''}</div></div>
+        <div class="meta">${esc(c.phone||'ไม่มีเบอร์')} · รถ ${vs.length} คัน · เข้าร้าน ${js.length} ครั้ง</div></div>
       <a class="btn ghost" href="#customer/${c.id}">ข้อมูลลูกค้า</a>
     </div>
     ${vs.length?vs.map(v=>`<div class="jobrow" style="padding-top:8px;border-top:1px solid var(--line)">
@@ -608,7 +608,7 @@ function viewSearch(q){
         <a class="btn" href="#new?plate=${encodeURIComponent(found.plate)}">รับรถคันนี้เข้า</a>
       </div>
       ${hit.mode==='core'?`<p class="hint">ค้นจาก "${esc(query)}" ตรงกับรถคันนี้ (ทะเบียนเดียวกัน)</p>`:(hit.mode!=='exact'?`<p class="hint">ค้นจาก "${esc(query)}" แล้วเจอคันเดียวคือคันนี้</p>`:'')}
-      <p class="hint">เข้าร้านมาแล้ว <b>${list.length}</b> ครั้ง · รวมทุกครั้ง <b class="money">${baht(list.reduce((s,j)=>s+totalOf(j),0))}</b> บาท · ค้างชำระ <b class="money">${baht(list.reduce((s,j)=>s+balanceOf(j),0))}</b> บาท</p>
+      <p class="hint">เข้าร้านมาแล้ว <b>${list.length}</b> ครั้ง · รวมทุกครั้ง <b class="money">${baht(list.reduce((s,j)=>s+totalOf(j),0))}</b> บาท</p>
       ${list.length?list.map(j=>jobCard(j,{showPlate:false})).join(''):'<p class="empty">ยังไม่มีประวัติการเข้าร้าน</p>'}
     </div>`;
   }
@@ -627,7 +627,7 @@ function viewSearch(q){
       <div class="tile"><b>${open.length}</b><small>คันค้างในร้าน</small></div>
       <div class="tile"><b>${S.vehicles.length}</b><small>รถในระบบ</small></div>
       <div class="tile"><b>${S.customers.length}</b><small>ลูกค้า</small></div>
-      <div class="tile"><b class="money">${baht(S.jobs.reduce((s,j)=>s+balanceOf(j),0))}</b><small>ยอดค้างรับรวม (บาท)</small></div>
+      <div class="tile"><b>${S.jobs.length}</b><small>ใบงานทั้งหมด</small></div>
     </div>
     ${hasSamples()?`<p class="hint">ระบบมีข้อมูลตัวอย่างอยู่ (ป้าย “ตัวอย่าง”) ใช้ลองก่อนได้ พอเริ่มใช้จริงแล้วลบทิ้ง <button class="link" data-act="purge-samples">ลบข้อมูลตัวอย่างทั้งหมด</button></p>`:''}`;
 }
@@ -1003,7 +1003,8 @@ function viewSales(mkArg){
         <input name="month" type="month" value="${esc(mk)}" style="max-width:200px">
         <button type="button" class="ghost" data-act="month-next" data-id="${mk}">เดือนถัดไป →</button>
         <button type="button" class="ghost" data-act="month-now">เดือนนี้</button>
-        <button type="button" data-act="export-month" data-id="${mk}">ดาวน์โหลด CSV</button>
+        <button type="button" class="ghost" data-act="export-month" data-id="${mk}">CSV สรุปรายใบงาน</button>
+        <button type="button" data-act="export-detail" data-id="${mk}">CSV รายละเอียดทุกรายการ</button>
       </form>
     </div>
     <div class="tiles">
@@ -1034,8 +1035,31 @@ function viewSales(mkArg){
           <td class="num money">${baht(m.balance)}</td>
           <td class="num">${m.list.length}</td></tr>`).join('')}</tbody>
       </table></div>
-      <p class="hint">ยอดค้างชำระคือเงินที่ยังเก็บไม่ครบของใบงานในเดือนนั้น ถ้าเก็บครบภายหลังตัวเลขนี้จะลดลงเอง</p>
+      <p class="hint">ไฟล์ "รายละเอียดทุกรายการ" แตกเป็นบรรทัดละ 1 รายการงาน พร้อมข้อมูลรถ ลูกค้า ช่าง และเงินของใบนั้น เอาไปทำ Pivot ใน Excel วิเคราะห์ต่อได้เลย · ยอดค้างชำระคือเงินที่ยังเก็บไม่ครบของใบงานในเดือนนั้น ถ้าเก็บครบภายหลังตัวเลขนี้จะลดลงเอง</p>
     </div>`;
+}
+async function exportMonthDetailCsv(mk){
+  const {list} = monthTotals(mk);
+  if(!list.length) return toast('เดือนนี้ยังไม่มีใบงาน',true);
+  const q = (t)=>'"'+String(t==null?'':t).replace(/"/g,'""')+'"';
+  const head = ['เดือน','วันรับรถ','วันนัดส่ง','รหัสใบงาน','ทะเบียน','จังหวัด','ยี่ห้อ','รุ่น','สี',
+    'ลูกค้า','เบอร์โทร','ช่างที่รับงาน','สถานะ','ลำดับรายการ','รายการงาน','ราคารายการ',
+    'ยอดรวมทั้งใบ','ชำระแล้วทั้งใบ','ค้างชำระทั้งใบ','จำนวนรายการในใบ','โน้ต'];
+  const lines=[head.map(q).join(',')];
+  list.slice().sort((a,b)=>String(a.dateIn).localeCompare(String(b.dateIn))).forEach(j=>{
+    const v=vehicle(j.vehicleId), c=ownerOfJob(j), items=itemsOf(j);
+    const base=[mk, j.dateIn||'', j.datePromised||'', j.id,
+      v?v.plate:'', v?provinceOf(v):'', v?(v.brand||''):'', v?(v.model||''):'', v?(v.color||''):'',
+      c?c.name:'', c?(c.phone||''):'', j.techName||'', STATUS[j.status]||''];
+    const tail=[(totalOf(j)/100).toFixed(2), (receivedOf(j)/100).toFixed(2), (balanceOf(j)/100).toFixed(2), items.length, (j.note||'').replace(/\n/g,' ')];
+    if(!items.length){ lines.push(base.concat(['','',''] .slice(0,1), ['ไม่มีรายการงาน','0.00'], tail).map(q).join(',')); return; }
+    items.forEach((it,idx)=>{ lines.push(base.concat([idx+1, it.name, (Number(it.priceSatang||0)/100).toFixed(2)], tail).map(q).join(',')); });
+  });
+  if(!S.downloads) return toast('มุมมองนี้ดาวน์โหลดไฟล์ไม่ได้',true);
+  try{
+    await S.downloads.save({filename:'src-garage-รายละเอียด-'+mk+'.csv', data:'\ufeff'+lines.join('\n')});
+    toast('ดาวน์โหลดไฟล์รายละเอียดแล้ว');
+  }catch(e){ if(!(e&&e.code==='declined')) toast('ดาวน์โหลดไม่สำเร็จ',true); }
 }
 async function exportMonthCsv(mk){
   const {list, total, received, balance} = monthTotals(mk);
@@ -1363,6 +1387,7 @@ document.addEventListener('click', (e)=>{
   if(act==='month-next'){ location.hash='#sales/'+shiftMonth(b.dataset.id,1); return; }
   if(act==='month-now'){ location.hash='#sales/'+today().slice(0,7); return; }
   if(act==='export-month'){ exportMonthCsv(b.dataset.id); return; }
+  if(act==='export-detail'){ exportMonthDetailCsv(b.dataset.id); return; }
   if(act==='add-item-row'){
     const box=document.getElementById('items');
     const wrap=document.createElement('div'); wrap.innerHTML=itemRowHTML(true);
