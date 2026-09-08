@@ -364,6 +364,16 @@ const unpaidJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)>0);
 const settledJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)<=0);
 const openJobs = ()=>S.jobs.filter(j=>OPEN.includes(j.status)).sort((a,b)=>String(a.datePromised||'9999').localeCompare(String(b.datePromised||'9999')));
 const plateKeyOf = (v)=>normPlate(v.plateKey||v.plate);
+/* แกนทะเบียน = ตัวอักษร+ตัวเลข ตัดชื่อจังหวัดและช่องว่างออก
+   "กค5260 พิจิตร" -> "กค5260" · "1กก1234" -> "1กก1234" · "ก-3187 พิษณุโลก" -> "ก3187"
+   ใช้ชี้ขาดว่าเป็นรถคันเดียวกัน ประวัติจะได้ไม่แตก */
+function plateCore(plate){
+  const k = normPlate(plate);
+  const m = /^([0-9]{0,2}[\u0E01-\u0E2E]{1,3}[0-9]{1,4})/.exec(k);
+  return m ? m[1] : k;
+}
+const coreOf = (v)=>v && (v.plateCore || plateCore(v.plateKey||v.plate));
+const findByCore = (plate)=>{ const c = plateCore(plate); return c ? S.vehicles.find(v=>coreOf(v)===c) : null; };
 const digitsOf = (str)=>String(str||'').replace(/[^0-9]/g,'');
 function editDistance(a,b){
   if(a===b) return 0;
@@ -385,6 +395,9 @@ function findVehicles(query){
   const rows = S.vehicles.map(v=>({v, key:plateKeyOf(v)}));
   const hitExact = rows.find(r=>r.key===q);
   if(hitExact) return {exact:hitExact.v, matches:[hitExact.v], mode:'exact'};
+
+  const byCore = findByCore(query);
+  if(byCore) return {exact:byCore, matches:[byCore], mode:'core'};
 
   let hits = rows.filter(r=>r.key.indexOf(q)>=0 || q.indexOf(r.key)>=0).map(r=>r.v);
   if(hits.length) return {exact:hits.length===1?hits[0]:null, matches:hits, mode:'partial'};
@@ -483,7 +496,8 @@ function viewSearch(q){
   const MODE_NOTE = {
     partial: 'ไม่มีทะเบียนตรงตัว จึงแสดงคันที่มีเลขนี้อยู่ในทะเบียน',
     digits: 'ไม่มีทะเบียนตรงตัว จับคู่จากตัวเลขในทะเบียน',
-    similar: 'ไม่พบทะเบียนนี้ นี่คือคันที่สะกดใกล้เคียงที่สุด'
+    similar: 'ไม่พบทะเบียนนี้ นี่คือคันที่สะกดใกล้เคียงที่สุด',
+    core: 'ทะเบียนเดียวกัน ต่างกันแค่จังหวัดหรือการเว้นวรรค'
   };
   let result = '';
   if(query && !found && hit.matches.length){
@@ -505,7 +519,7 @@ function viewSearch(q){
         <a class="btn ghost" href="#vehicle/${found.id}">แก้ข้อมูลรถ/เจ้าของ</a>
         <a class="btn" href="#new?plate=${encodeURIComponent(found.plate)}">รับรถคันนี้เข้า</a>
       </div>
-      ${hit.mode!=='exact'?`<p class="hint">ค้นจาก "${esc(query)}" แล้วเจอคันเดียวคือคันนี้</p>`:''}
+      ${hit.mode==='core'?`<p class="hint">ค้นจาก "${esc(query)}" ตรงกับรถคันนี้ (ทะเบียนเดียวกัน)</p>`:(hit.mode!=='exact'?`<p class="hint">ค้นจาก "${esc(query)}" แล้วเจอคันเดียวคือคันนี้</p>`:'')}
       <p class="hint">เข้าร้านมาแล้ว <b>${list.length}</b> ครั้ง · รวมทุกครั้ง <b class="money">${baht(list.reduce((s,j)=>s+totalOf(j),0))}</b> บาท · ค้างชำระ <b class="money">${baht(list.reduce((s,j)=>s+balanceOf(j),0))}</b> บาท</p>
       ${list.length?list.map(j=>jobCard(j,{showPlate:false})).join(''):'<p class="empty">ยังไม่มีประวัติการเข้าร้าน</p>'}
     </div>`;
@@ -641,7 +655,7 @@ function viewNew(prefill){
   const options = S.customers.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'th'))
     .map(c=>`<option value="${c.id}">${esc(c.name)}${c.phone?' · '+esc(c.phone):''}</option>`).join('');
   app().innerHTML = `
-    <div class="head"><h1>รับรถเข้า</h1><p>ถ้าทะเบียนนี้เคยเข้าร้านแล้ว ระบบจะผูกกับรถคันเดิมให้เอง ไม่สร้างซ้ำ</p></div>
+    <div class="head"><h1>รับรถเข้า</h1><p>ทะเบียนตัวอักษรและตัวเลขเดียวกัน = รถคันเดิมเสมอ ระบบผูกกับประวัติเดิมให้อัตโนมัติ ใส่จังหวัดหรือไม่ใส่ก็ได้</p></div>
     <form data-form="new-job" class="panel">
       <h2>รถ</h2>
       <div class="fields">
@@ -656,7 +670,7 @@ function viewNew(prefill){
         <label>ชื่อลูกค้าใหม่<input name="customerName" placeholder="กรอกเมื่อเป็นลูกค้าใหม่"></label>
         <label>เบอร์โทร<input name="phone" placeholder="08x-xxx-xxxx"></label>
       </div>
-      <p class="hint">รถที่เคยเข้าร้านแล้วจะใช้เจ้าของเดิม ช่องเจ้าของจะถูกข้ามไป</p>
+      <p class="hint">รถที่เคยเข้าร้านแล้วจะใช้เจ้าของเดิม ช่องเจ้าของจะถูกข้ามไป · ระบบไม่สร้างรถซ้ำให้ทุกกรณี</p>
       <h2>งานครั้งนี้</h2>
       <div class="fields">
         <label>วันรับรถ * (วันนี้ ${fmtDate(today())})<input name="dateIn" type="date" value="${today()}" required></label>
@@ -955,9 +969,10 @@ async function saveVehicle(id, f){
   const plate=(f.get('plate')||'').trim();
   if(!plate) return toast('ต้องมีเลขทะเบียน',true);
   const key=normPlate(plate);
-  const clash=S.vehicles.find(v=>v.id!==id&&normPlate(v.plateKey||v.plate)===key);
-  if(clash) return toast('ทะเบียนนี้มีอยู่แล้วในระบบ',true);
-  try{ await S.db.doc('vehicles/'+id).update({plate,plateKey:key,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId:f.get('customerId')||'',updatedAt:new Date().toISOString()}); toast('บันทึกข้อมูลรถแล้ว'); render(); }catch(e){ fail(e); }
+  const core=plateCore(plate);
+  const clash=S.vehicles.find(v=>v.id!==id&&(plateKeyOf(v)===key||coreOf(v)===core));
+  if(clash) return toast('ทะเบียนนี้ซ้ำกับรถที่มีอยู่แล้ว ('+clash.plate+') ถ้าเป็นคันเดียวกันให้ใช้ประวัติเดิม',true);
+  try{ await S.db.doc('vehicles/'+id).update({plate,plateKey:key,plateCore:core,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId:f.get('customerId')||'',updatedAt:new Date().toISOString()}); toast('บันทึกข้อมูลรถแล้ว'); render(); }catch(e){ fail(e); }
 }
 async function delVehicle(id){
   if(jobsOfVehicle(id).length) return toast('ลบไม่ได้ รถคันนี้ยังมีใบงานอยู่',true);
@@ -994,8 +1009,16 @@ async function createJob(form, f){
   if(!Number.isFinite(deposit)||deposit<0) return toast('มัดจำต้องเป็นตัวเลขไม่ติดลบ',true);
   if(deposit>total) return toast(total===0?'ใส่รายการงานและราคาก่อน แล้วค่อยรับมัดจำ':'มัดจำเกินยอดรวม '+baht(total)+' บาท',true);
 
-  let v = S.vehicles.find(x=>normPlate(x.plateKey||x.plate)===key);
+  let v = S.vehicles.find(x=>plateKeyOf(x)===key) || findByCore(plate);
   try{
+    if(v){
+      /* รถคันเดิมแน่นอน: ถ้าที่พิมพ์รอบนี้ละเอียดกว่า (มีจังหวัด) อัปเดตป้ายให้ครบ แต่ยังเป็น id เดิม ประวัติไม่แตก */
+      if(plate.length > String(v.plate||'').length && plateCore(plate)===coreOf(v)){
+        await S.db.doc('vehicles/'+v.id).update({plate, plateKey:key, plateCore:plateCore(plate), updatedAt:new Date().toISOString()});
+      } else if(normPlate(v.plate)!==key){
+        toast('ทะเบียนนี้เคยเข้าร้านแล้ว ผูกกับประวัติเดิมของ '+v.plate);
+      }
+    }
     if(!v){
       let customerId=f.get('customerId')||'';
       if(!customerId){
@@ -1004,7 +1027,7 @@ async function createJob(form, f){
         const ref=await S.db.collection('customers').add({name,phone:(f.get('phone')||'').trim(),note:'',createdAt:new Date().toISOString()});
         customerId=ref.id;
       }
-      const vref=await S.db.collection('vehicles').add({plate,plateKey:key,brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId,createdAt:new Date().toISOString()});
+      const vref=await S.db.collection('vehicles').add({plate,plateKey:key,plateCore:plateCore(plate),brand:(f.get('brand')||'').trim(),model:(f.get('model')||'').trim(),color:(f.get('color')||'').trim(),customerId,createdAt:new Date().toISOString()});
       v={id:vref.id};
     }
     const jref=await S.db.collection('jobs').add({
