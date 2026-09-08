@@ -363,6 +363,57 @@ const deliveredJobs = ()=>S.jobs.filter(j=>j.status==='delivered').sort((a,b)=>S
 const unpaidJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)>0);
 const settledJobs = ()=>deliveredJobs().filter(j=>balanceOf(j)<=0);
 const openJobs = ()=>S.jobs.filter(j=>OPEN.includes(j.status)).sort((a,b)=>String(a.datePromised||'9999').localeCompare(String(b.datePromised||'9999')));
+const plateKeyOf = (v)=>normPlate(v.plateKey||v.plate);
+const digitsOf = (str)=>String(str||'').replace(/[^0-9]/g,'');
+function editDistance(a,b){
+  if(a===b) return 0;
+  if(!a.length||!b.length) return Math.max(a.length,b.length);
+  let prev=Array.from({length:b.length+1},(_,i)=>i);
+  for(let i=1;i<=a.length;i++){
+    const cur=[i];
+    for(let j=1;j<=b.length;j++){
+      cur[j]=Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    }
+    prev=cur;
+  }
+  return prev[b.length];
+}
+/* ค้นทะเบียน 3 ชั้น: ตรงตัว -> มีอยู่ในทะเบียน -> ตัวเลขตรง -> สะกดใกล้เคียง */
+function findVehicles(query){
+  const q = normPlate(query);
+  if(!q) return {exact:null, matches:[], mode:'none'};
+  const rows = S.vehicles.map(v=>({v, key:plateKeyOf(v)}));
+  const hitExact = rows.find(r=>r.key===q);
+  if(hitExact) return {exact:hitExact.v, matches:[hitExact.v], mode:'exact'};
+
+  let hits = rows.filter(r=>r.key.indexOf(q)>=0 || q.indexOf(r.key)>=0).map(r=>r.v);
+  if(hits.length) return {exact:hits.length===1?hits[0]:null, matches:hits, mode:'partial'};
+
+  const qd = digitsOf(q);
+  if(qd.length>=3){
+    hits = rows.filter(r=>{ const d=digitsOf(r.key); return d && (d.indexOf(qd)>=0 || qd.indexOf(d)>=0); }).map(r=>r.v);
+    if(hits.length) return {exact:hits.length===1?hits[0]:null, matches:hits, mode:'digits'};
+  }
+
+  const scored = rows.map(r=>{
+    const byKey = editDistance(q, r.key);
+    const rd = digitsOf(r.key);
+    const byDigits = (qd && rd) ? editDistance(qd, rd) : 99;
+    return {v:r.v, d:Math.min(byKey, byDigits)};
+  }).filter(x=>x.d<=2).sort((a,b)=>a.d-b.d).slice(0,6);
+  if(scored.length) return {exact:null, matches:scored.map(x=>x.v), mode:'similar'};
+  return {exact:null, matches:[], mode:'none'};
+}
+function vehicleLine(v){
+  const c = customer(v.customerId);
+  const js = jobsOfVehicle(v.id);
+  return `<div class="jobrow" style="padding:10px 0;border-bottom:1px solid var(--line)">
+    ${plateLink(v)}
+    <div class="grow"><b>${esc(v.brand||'')} ${esc(v.model||'')}</b>${v.color?' สี'+esc(v.color):''}
+      <div class="meta">${esc(c?c.name:'—')} · เข้าร้าน ${js.length} ครั้ง${js[0]?' · ล่าสุด '+esc(fmtDate(js[0].dateIn)):''}</div></div>
+    <a class="btn ghost" href="#search/${encodeURIComponent(v.plate)}">เปิดประวัติ</a>
+  </div>`;
+}
 const serviceById = (id)=>S.services.find(x=>x.id===id);
 const sortedServices = ()=>S.services.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'th'));
 function serviceOptions(){ return sortedServices().map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join(''); }
@@ -426,13 +477,24 @@ function jobCard(j,{showPlate=true,pay=false}={}){
 /* ---------- หน้า: ค้นทะเบียน ---------- */
 function viewSearch(q){
   const query = q||'';
-  const key = normPlate(query);
-  const found = key ? S.vehicles.find(v=>normPlate(v.plateKey||v.plate)===key) : null;
+  const hit = query ? findVehicles(query) : {exact:null, matches:[], mode:'none'};
+  const found = hit.exact;
   const open = openJobs();
+  const MODE_NOTE = {
+    partial: 'ไม่มีทะเบียนตรงตัว จึงแสดงคันที่มีเลขนี้อยู่ในทะเบียน',
+    digits: 'ไม่มีทะเบียนตรงตัว จับคู่จากตัวเลขในทะเบียน',
+    similar: 'ไม่พบทะเบียนนี้ นี่คือคันที่สะกดใกล้เคียงที่สุด'
+  };
   let result = '';
-  if(query && !found){
+  if(query && !found && hit.matches.length){
+    result = `<div class="panel">
+      <div class="head"><h2>เจอ ${hit.matches.length} คันที่ใกล้เคียง "${esc(query)}"</h2><p>${MODE_NOTE[hit.mode]||''}</p></div>
+      ${hit.matches.map(vehicleLine).join('')}
+      <div class="actions"><a class="btn ghost" href="#new?plate=${encodeURIComponent(query.trim())}">ไม่ใช่สักคัน — รับรถคันใหม่เข้า</a></div>
+    </div>`;
+  } else if(query && !found){
     result = `<div class="panel"><h2>ไม่พบทะเบียน "${esc(query)}"</h2>
-      <p class="hint">ตรวจตัวเลขและตัวอักษรอีกครั้ง หรือเปิดใบงานใหม่ให้รถคันนี้</p>
+      <p class="hint">ลองพิมพ์แค่ตัวเลข เช่น 5260 · หรือเปิดใบงานใหม่ให้รถคันนี้</p>
       <div class="actions"><a class="btn" href="#new?plate=${encodeURIComponent(query.trim())}">รับรถคันนี้เข้า</a></div></div>`;
   } else if(found){
     const c = customer(found.customerId); const list = jobsOfVehicle(found.id);
@@ -443,6 +505,7 @@ function viewSearch(q){
         <a class="btn ghost" href="#vehicle/${found.id}">แก้ข้อมูลรถ/เจ้าของ</a>
         <a class="btn" href="#new?plate=${encodeURIComponent(found.plate)}">รับรถคันนี้เข้า</a>
       </div>
+      ${hit.mode!=='exact'?`<p class="hint">ค้นจาก "${esc(query)}" แล้วเจอคันเดียวคือคันนี้</p>`:''}
       <p class="hint">เข้าร้านมาแล้ว <b>${list.length}</b> ครั้ง · รวมทุกครั้ง <b class="money">${baht(list.reduce((s,j)=>s+totalOf(j),0))}</b> บาท · ค้างชำระ <b class="money">${baht(list.reduce((s,j)=>s+balanceOf(j),0))}</b> บาท</p>
       ${list.length?list.map(j=>jobCard(j,{showPlate:false})).join(''):'<p class="empty">ยังไม่มีประวัติการเข้าร้าน</p>'}
     </div>`;
@@ -454,7 +517,7 @@ function viewSearch(q){
         <input name="plate" value="${esc(query)}" placeholder="1กก1234" autocomplete="off" inputmode="text" aria-label="เลขทะเบียนรถ">
         <button type="submit">ค้นหา</button>
       </form>
-      <p class="hint">เว้นวรรคหรือขีดกลางไม่มีผล · ${S.vehicles.slice(0,4).map(v=>`<a href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a>`).join(' · ')||'ยังไม่มีรถในระบบ'}</p>
+      <p class="hint">พิมพ์แค่บางส่วนก็ได้ เช่น <b>5260</b> · เว้นวรรค ขีดกลาง และจังหวัดไม่มีผล · ${S.vehicles.slice(0,4).map(v=>`<a href="#search/${encodeURIComponent(v.plate)}">${esc(v.plate)}</a>`).join(' · ')||'ยังไม่มีรถในระบบ'}</p>
     </div>
     ${result}
     <div class="tiles">
