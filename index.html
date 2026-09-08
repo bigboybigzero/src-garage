@@ -764,25 +764,42 @@ function viewJob(id){
 function viewNew(prefill){
   const options = S.customers.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'th'))
     .map(c=>`<option value="${c.id}">${esc(c.name)}${c.phone?' · '+esc(c.phone):''}</option>`).join('');
+  const known = prefill ? (S.vehicles.find(v=>plateKeyOf(v)===normPlate(splitPlate(prefill).plate)) || findByCore(prefill)) : null;
+  const owner = known ? customer(known.customerId) : null;
+  const history = known ? jobsOfVehicle(known.id) : [];
+  const last = history[0];
+  const knownPanel = known ? `<div class="panel" style="border-color:var(--accent)">
+      <div class="jobrow">
+        ${plateLink(known)}
+        <div class="grow"><h2>${esc(((known.brand||'')+' '+(known.model||'')).trim()||'ไม่ได้ระบุรถ')}</h2>
+          <div class="meta">${known.color?'สี'+esc(known.color)+' · ':''}${provinceOf(known)?esc(provinceOf(known))+' · ':''}เจ้าของ ${esc(owner?owner.name:'—')}${owner&&owner.phone?' · '+esc(owner.phone):''}</div></div>
+        <a class="btn ghost" href="#search/${encodeURIComponent(known.plate)}">ประวัติ ${history.length} ครั้ง</a>
+      </div>
+      ${last?`<div class="meta">ครั้งล่าสุด ${esc(fmtDate(last.dateIn))} · ${esc(itemsOf(last).map(i=>i.name).join(' · ')||'ไม่มีรายการงาน')}${last.techName?' · ช่าง '+esc(last.techName):''} · ${STATUS[last.status]}</div>`:''}
+      <p class="hint">ลูกค้าเก่า ข้อมูลรถและเจ้าของกรอกไว้ให้แล้ว กรอกเฉพาะงานที่จะทำรอบนี้พอ · ถ้าข้อมูลรถเปลี่ยนไปแก้ได้ที่ <a href="#vehicle/${known.id}">แก้ข้อมูลรถ</a></p>
+    </div>` : '';
   app().innerHTML = `
-    <div class="head"><h1>รับรถเข้า</h1><p>ทะเบียนตัวอักษรและตัวเลขเดียวกัน = รถคันเดิมเสมอ ระบบผูกกับประวัติเดิมให้อัตโนมัติ ใส่จังหวัดหรือไม่ใส่ก็ได้</p></div>
+    <div class="head"><h1>รับรถเข้า</h1><p>${known?'รถคันนี้เคยเข้าร้านแล้ว งานรอบนี้จะต่อเข้าประวัติเดิมของลูกค้า':'ทะเบียนตัวอักษรและตัวเลขเดียวกัน = รถคันเดิมเสมอ ระบบผูกกับประวัติเดิมให้อัตโนมัติ'}</p></div>
     ${provinceDatalist()}
+    ${knownPanel}
     <form data-form="new-job" class="panel">
       <h2>รถ</h2>
       <div class="fields">
-        <label>เลขทะเบียน *<input name="plate" value="${esc(prefill||'')}" placeholder="กค5260" required autocomplete="off"></label>
-        <label>จังหวัด<input name="province" list="province-list" placeholder="พิมพ์ 2–3 ตัวแล้วเลือก" autocomplete="off"></label>
-        <label>ยี่ห้อ<input name="brand" placeholder="Toyota"></label>
-        <label>รุ่น<input name="model" placeholder="Yaris"></label>
-        <label>สี<input name="color" placeholder="ขาว"></label>
+        <label>เลขทะเบียน *<input name="plate" value="${esc(known?known.plate:(prefill||''))}" placeholder="กค5260" required autocomplete="off"></label>
+        <label>จังหวัด<input name="province" value="${esc(known?provinceOf(known):'')}" list="province-list" placeholder="พิมพ์ 2–3 ตัวแล้วเลือก" autocomplete="off"></label>
+        <label>ยี่ห้อ<input name="brand" value="${esc(known?(known.brand||''):'')}" placeholder="Toyota"></label>
+        <label>รุ่น<input name="model" value="${esc(known?(known.model||''):'')}" placeholder="Yaris"></label>
+        <label>สี<input name="color" value="${esc(known?(known.color||''):'')}" placeholder="ขาว"></label>
       </div>
-      <h2>เจ้าของรถ</h2>
+      ${known ? `<h2>เจ้าของรถ</h2>
+      <p class="hint">ใช้เจ้าของเดิม: <b>${esc(owner?owner.name:'—')}</b>${owner&&owner.phone?' · '+esc(owner.phone):''} — ไม่ต้องกรอกใหม่ · เปลี่ยนเจ้าของได้ที่ <a href="#vehicle/${known.id}">แก้ข้อมูลรถ</a></p>`
+      : `<h2>เจ้าของรถ</h2>
       <div class="fields">
         <label>ลูกค้าเดิม<select name="customerId"><option value="">— ลูกค้าใหม่ —</option>${options}</select></label>
         <label>ชื่อลูกค้าใหม่<input name="customerName" placeholder="กรอกเมื่อเป็นลูกค้าใหม่"></label>
         <label>เบอร์โทร<input name="phone" placeholder="08x-xxx-xxxx"></label>
       </div>
-      <p class="hint">รถที่เคยเข้าร้านแล้วจะใช้เจ้าของเดิม ช่องเจ้าของจะถูกข้ามไป · ระบบไม่สร้างรถซ้ำให้ทุกกรณี</p>
+      <p class="hint">รถที่เคยเข้าร้านแล้วจะใช้เจ้าของเดิม ช่องเจ้าของจะถูกข้ามไป · ระบบไม่สร้างรถซ้ำให้ทุกกรณี</p>`}
       <h2>งานครั้งนี้</h2>
       <div class="fields">
         <label>วันรับรถ * (วันนี้ ${fmtDate(today())})<input name="dateIn" type="date" value="${today()}" required></label>
@@ -797,6 +814,10 @@ function viewNew(prefill){
       <p class="hint">มัดจำต้องไม่เกินยอดรวมของรายการงาน · เว้นว่าง = 0</p>
       <div class="actions"><button type="submit">เปิดใบงาน</button></div>
     </form>`;
+  if(known){
+    const sel = document.querySelector('#items select[name="itemService"]');
+    if(sel) sel.focus();
+  }
 }
 
 /* ---------- หน้า: ลูกค้า ---------- */
